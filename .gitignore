@@ -1,0 +1,39 @@
+# 编译产物
+herobox
+herobox.exe
+*.tar.gz
+*.zip
+
+# 构建和临时文件
+bin/
+build/
+dist/
+*.log
+*.tmp
+
+# 构建产物
+herobox-linux-*.tar.gz
+
+# 前端依赖和构建产物
+web/node_modules/
+web/dist/
+web/.vite/
+
+# IDE和编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 操作系统
+.DS_Store
+Thumbs.db
+
+# 配置文件（可选）
+config.local.json
+.env.local
+
+# 备份文件
+backups/
+*.backup
