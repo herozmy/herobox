@@ -77,6 +77,7 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			singbox.GET("/config", configHandler.GetSingBoxConfig)
 			singbox.PUT("/config", configHandler.UpdateSingBoxConfig)
 			singbox.POST("/config/validate", configHandler.ValidateSingBoxConfig)
+			singbox.POST("/config/validate-current", configHandler.ValidateCurrentSingBoxConfig)
 
 			// 分模块获取配置
 			singbox.GET("/inbounds", configHandler.GetSingBoxInbounds)
@@ -91,6 +92,24 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 			singbox.POST("/rules/route", configHandler.CreateRouteRule)
 			singbox.PUT("/rules/route/:id", configHandler.UpdateRouteRule)
 			singbox.DELETE("/rules/route/:id", configHandler.DeleteRouteRule)
+			// 路由规则排序
+			singbox.POST("/rules/route/:id/move-up", configHandler.MoveRouteRuleUp)
+			singbox.POST("/rules/route/:id/move-down", configHandler.MoveRouteRuleDown)
+			singbox.POST("/rules/route/reorder", configHandler.ReorderRouteRules)
+
+			// 规则集管理
+			singbox.POST("/rulesets", configHandler.CreateRuleSet)
+			singbox.PUT("/rulesets/:id", configHandler.UpdateRuleSet)
+			singbox.DELETE("/rulesets/:id", configHandler.DeleteRuleSet)
+
+			// 内核更新管理
+			kernel := singbox.Group("/kernel")
+			{
+				kernel.GET("/detect-path", configHandler.DetectSingBoxPath)
+				kernel.GET("/check-update", configHandler.CheckSingBoxUpdate)
+				kernel.POST("/update", configHandler.UpdateSingBoxKernel)
+				kernel.GET("/update-stream", configHandler.UpdateSingBoxKernelStream)
+			}
 		}
 	}
 

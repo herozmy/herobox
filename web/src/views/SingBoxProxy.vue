@@ -4,6 +4,24 @@
       <h2>代理/出站</h2>
     </div>
 
+    <!-- 重启服务提醒栏 -->
+    <div v-if="needsRestart" class="restart-bar">
+      <div class="restart-bar-content">
+        <div class="restart-bar-info">
+          <el-icon class="restart-icon"><RefreshRight /></el-icon>
+          <span>配置已保存，需要重启 Sing-Box 服务以应用更改</span>
+        </div>
+        <div class="restart-bar-actions">
+          <el-button type="success" @click="restartService" :loading="isRestarting">
+            重启服务
+          </el-button>
+          <el-button type="default" @click="dismissRestart">
+            稍后重启
+          </el-button>
+        </div>
+      </div>
+    </div>
+
     <!-- 服务状态 -->
     <ServiceStatus service-name="sing-box" />
 
@@ -364,7 +382,7 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { 
-  Plus, Connection, Refresh, Edit, Delete, CircleCheck, Document
+  Plus, Connection, Refresh, Edit, Delete, CircleCheck, Document, RefreshRight
 } from '@element-plus/icons-vue'
 import ServiceStatus from '../components/ServiceStatus.vue'
 import { 
@@ -374,7 +392,8 @@ import {
   apiDeleteSingBoxOutbound,
   apiRestartSingBoxService,
   apiValidateOutboundsChanges,
-  apiBatchSaveOutbounds
+  apiBatchSaveOutbounds,
+  apiValidateCurrentSingBoxConfig
 } from '../utils/api'
 
 // 响应式数据
@@ -389,6 +408,10 @@ const saveOption = ref('save')
 const pendingOperation = ref(null)
 const saving = ref(false)
 const savingAll = ref(false)
+
+// 重启服务状态管理
+const needsRestart = ref(false)
+const isRestarting = ref(false)
 const pendingChanges = ref([])
 const originalConfig = ref(null)
 const formRef = ref()
@@ -913,35 +936,9 @@ const saveProxy = async () => {
     dialogVisible.value = false
     await refreshNodes() // 刷新节点列表
     
-    // 只有在保存成功后才询问是否重启服务
+    // 标记需要重启服务
     if (saveSuccess) {
-      try {
-        await ElMessageBox.confirm(
-          '✅ 配置验证成功并已保存！\n\n是否重启 Sing-Box 服务以应用更改？',
-          '重启服务',
-          {
-            confirmButtonText: '重启服务',
-            cancelButtonText: '稍后手动重启',
-            type: 'info',
-            closeOnClickModal: false,
-            closeOnPressEscape: false,
-            showClose: true
-          }
-        )
-        
-        // 用户选择重启服务
-        try {
-          const { apiRestartSingBoxService } = await import('../utils/api')
-          await apiRestartSingBoxService()
-          ElMessage.success('Sing-Box 服务重启成功')
-        } catch (restartError) {
-          console.error('重启服务失败:', restartError)
-          ElMessage.error('重启服务失败: ' + (restartError.response?.data?.message || restartError.message))
-        }
-      } catch (confirmError) {
-        // 用户取消重启，不做任何操作
-        console.log('用户选择稍后手动重启服务')
-      }
+      needsRestart.value = true
     }
     
   } catch (error) {
@@ -1100,13 +1097,10 @@ const confirmSave = async () => {
     // 批量保存所有更改
     await apiBatchSaveOutbounds(pendingChanges.value)
     
-    // 如果选择保存并重启，执行重启操作
-    if (saveOption.value === 'save-restart') {
-      await apiRestartSingBoxService()
-      ElMessage.success('配置已保存并成功重启 Sing-Box 服务')
-    } else {
-      ElMessage.success('配置已保存')
-    }
+    ElMessage.success('配置已保存')
+    
+    // 标记需要重启服务
+    needsRestart.value = true
     
     // 只有在用户确认保存后才清空待保存更改
     pendingChanges.value = []
@@ -1152,34 +1146,8 @@ const deleteProxy = (proxy) => {
       ElMessage.success('节点删除成功')
       await refreshNodes() // 刷新节点列表
       
-      // 询问是否重启服务
-      try {
-        await ElMessageBox.confirm(
-          '节点已删除。是否重启 Sing-Box 服务以应用更改？',
-          '重启服务',
-          {
-            confirmButtonText: '重启服务',
-            cancelButtonText: '稍后手动重启',
-            type: 'info',
-            closeOnClickModal: false,
-            closeOnPressEscape: false,
-            showClose: true
-          }
-        )
-        
-        // 用户选择重启服务
-        try {
-          const { apiRestartSingBoxService } = await import('../utils/api')
-          await apiRestartSingBoxService()
-          ElMessage.success('Sing-Box 服务重启成功')
-        } catch (restartError) {
-          console.error('重启服务失败:', restartError)
-          ElMessage.error('重启服务失败: ' + (restartError.response?.data?.message || restartError.message))
-        }
-      } catch (confirmError) {
-        // 用户取消重启，不做任何操作
-        console.log('用户选择稍后手动重启服务')
-      }
+      // 标记需要重启服务
+      needsRestart.value = true
     } catch (error) {
       console.error('删除节点失败:', error)
       ElMessage.error('删除失败: ' + (error.response?.data?.message || error.message))
@@ -1217,6 +1185,68 @@ const testAllNodes = async () => {
   ElMessage.success('所有节点测试完成')
 }
 
+// 重启服务（与规则页面相同的验证+重启流程）
+const restartService = async () => {
+  try {
+    isRestarting.value = true
+    
+    // 第一步：验证当前配置
+    ElMessage.info('正在验证配置文件...')
+    const validationResult = await apiValidateCurrentSingBoxConfig()
+    
+    if (!validationResult.data.valid) {
+      // 配置验证失败
+      ElMessageBox.alert(
+        `配置文件验证失败，无法重启服务：\n\n${validationResult.data.error || '未知错误'}`,
+        '配置验证失败',
+        {
+          confirmButtonText: '确定',
+          type: 'error',
+          dangerouslyUseHTMLString: false
+        }
+      )
+      return
+    }
+    
+    // 第二步：配置验证通过，确认重启
+    await ElMessageBox.confirm(
+      '✅ 配置文件验证通过！\n\n确定要重启 Sing-Box 服务吗？',
+      '确认重启服务',
+      {
+        confirmButtonText: '重启服务',
+        cancelButtonText: '取消',
+        type: 'info'
+      }
+    )
+    
+    // 第三步：执行重启
+    ElMessage.info('正在重启服务...')
+    await apiRestartSingBoxService()
+    
+    ElMessage.success('Sing-Box 服务重启成功')
+    needsRestart.value = false
+    
+  } catch (error) {
+    // 区分不同类型的错误
+    if (error === 'cancel') {
+      ElMessage.info('已取消重启服务')
+    } else if (error.response?.data?.error) {
+      ElMessage.error('重启服务失败: ' + error.response.data.error)
+    } else if (error.message) {
+      ElMessage.error('重启服务失败: ' + error.message)
+    } else {
+      ElMessage.error('重启服务失败')
+    }
+  } finally {
+    isRestarting.value = false
+  }
+}
+
+// 稍后重启（隐藏提醒栏）
+const dismissRestart = () => {
+  needsRestart.value = false
+  ElMessage.info('已隐藏重启提醒，您可以稍后手动重启服务')
+}
 
 // 组件挂载时获取数据
 onMounted(() => {
@@ -1235,6 +1265,42 @@ onMounted(() => {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 20px;
+}
+
+/* 重启服务提醒栏样式 */
+.restart-bar {
+  background-color: #f0f9ff;
+  border: 1px solid #91d5ff;
+  border-radius: 6px;
+  margin-bottom: 20px;
+  padding: 0;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+}
+
+.restart-bar-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+}
+
+.restart-bar-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #1677ff;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.restart-icon {
+  color: #52c41a;
+  font-size: 16px;
+}
+
+.restart-bar-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .page-header h2 {

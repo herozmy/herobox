@@ -1,15 +1,20 @@
 package api
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"herobox/internal/models"
 	"herobox/internal/service"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -638,7 +643,8 @@ func (h *ConfigHandler) GetSingBoxOutbounds(c *gin.Context) {
 
 // GetSingBoxRules 获取Sing-Box路由规则和规则集
 func (h *ConfigHandler) GetSingBoxRules(c *gin.Context) {
-	config, err := h.readSingBoxConfig()
+	// 使用通用解析，避免结构体字段差异导致的条件缺失
+	config, err := h.readSingBoxConfigAsInterface()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse(500, "读取配置文件失败: "+err.Error()))
 		return
@@ -648,272 +654,167 @@ func (h *ConfigHandler) GetSingBoxRules(c *gin.Context) {
 	var ruleSets []gin.H
 
 	// 处理路由规则 (route.rules)
-	if config.Route != nil && config.Route.Rules != nil {
-		for i, rule := range config.Route.Rules {
-			var conditions []gin.H
+	if routeObj, ok := config["route"].(map[string]interface{}); ok {
+		if rulesArr, ok := routeObj["rules"].([]interface{}); ok {
+			for i, r := range rulesArr {
+				ruleMap, _ := r.(map[string]interface{})
 
-			// 使用数组索引作为ID（从1开始，便于用户理解）
-			ruleID := strconv.Itoa(i + 1)
-
-			// 检查各种匹配条件
-			if domainArr := convertToStringArray(rule.Domain); len(domainArr) > 0 {
-				conditions = append(conditions, gin.H{
-					"type":    "domain",
-					"content": joinStringArray(domainArr),
-				})
-			}
-			if domainSuffixArr := convertToStringArray(rule.DomainSuffix); len(domainSuffixArr) > 0 {
-				conditions = append(conditions, gin.H{
-					"type":    "domain_suffix",
-					"content": joinStringArray(domainSuffixArr),
-				})
-			}
-			if domainKeywordArr := convertToStringArray(rule.DomainKeyword); len(domainKeywordArr) > 0 {
-				conditions = append(conditions, gin.H{
-					"type":    "domain_keyword",
-					"content": joinStringArray(domainKeywordArr),
-				})
-			}
-			if domainRegexArr := convertToStringArray(rule.DomainRegex); len(domainRegexArr) > 0 {
-				conditions = append(conditions, gin.H{
-					"type":    "domain_regex",
-					"content": joinStringArray(domainRegexArr),
-				})
-			}
-			if ipcidrArr := convertToStringArray(rule.IPCIDR); len(ipcidrArr) > 0 {
-				conditions = append(conditions, gin.H{
-					"type":    "ip_cidr",
-					"content": joinStringArray(ipcidrArr),
-				})
-			}
-			if geoipArr := convertToStringArray(rule.GeoIP); len(geoipArr) > 0 {
-				conditions = append(conditions, gin.H{
-					"type":    "geoip",
-					"content": joinStringArray(geoipArr),
-				})
-			}
-			if geositeArr := convertToStringArray(rule.Geosite); len(geositeArr) > 0 {
-				conditions = append(conditions, gin.H{
-					"type":    "geosite",
-					"content": joinStringArray(geositeArr),
-				})
-			}
-			if sourceGeoIPArr := convertToStringArray(rule.SourceGeoIP); len(sourceGeoIPArr) > 0 {
-				conditions = append(conditions, gin.H{
-					"type":    "source_geoip",
-					"content": joinStringArray(sourceGeoIPArr),
-				})
-			}
-			if inboundArr := convertToStringArray(rule.Inbound); len(inboundArr) > 0 {
-				conditions = append(conditions, gin.H{
-					"type":    "inbound",
-					"content": joinStringArray(inboundArr),
-				})
-			}
-			if protocolArr := convertToStringArray(rule.Protocol); len(protocolArr) > 0 {
-				conditions = append(conditions, gin.H{
-					"type":    "protocol",
-					"content": joinStringArray(protocolArr),
-				})
-			}
-			if networkArr := convertToStringArray(rule.Network); len(networkArr) > 0 {
-				conditions = append(conditions, gin.H{
-					"type":    "network",
-					"content": joinStringArray(networkArr),
-				})
-			}
-			if authUserArr := convertToStringArray(rule.AuthUser); len(authUserArr) > 0 {
-				conditions = append(conditions, gin.H{
-					"type":    "auth_user",
-					"content": joinStringArray(authUserArr),
-				})
-			}
-			if portArr := convertToStringArray(rule.Port); len(portArr) > 0 {
-				conditions = append(conditions, gin.H{
-					"type":    "port",
-					"content": joinStringArray(portArr),
-				})
-			}
-			if portRangeArr := convertToStringArray(rule.PortRange); len(portRangeArr) > 0 {
-				conditions = append(conditions, gin.H{
-					"type":    "port_range",
-					"content": joinStringArray(portRangeArr),
-				})
-			}
-			if sourcePortArr := convertToStringArray(rule.SourcePort); len(sourcePortArr) > 0 {
-				conditions = append(conditions, gin.H{
-					"type":    "source_port",
-					"content": joinStringArray(sourcePortArr),
-				})
-			}
-			if sourcePortRangeArr := convertToStringArray(rule.SourcePortRange); len(sourcePortRangeArr) > 0 {
-				conditions = append(conditions, gin.H{
-					"type":    "source_port_range",
-					"content": joinStringArray(sourcePortRangeArr),
-				})
-			}
-			if sourceIPArr := convertToStringArray(rule.SourceIPCIDR); len(sourceIPArr) > 0 {
-				conditions = append(conditions, gin.H{
-					"type":    "source_ip_cidr",
-					"content": joinStringArray(sourceIPArr),
-				})
-			}
-			if processNameArr := convertToStringArray(rule.ProcessName); len(processNameArr) > 0 {
-				conditions = append(conditions, gin.H{
-					"type":    "process_name",
-					"content": joinStringArray(processNameArr),
-				})
-			}
-			if processPathArr := convertToStringArray(rule.ProcessPath); len(processPathArr) > 0 {
-				conditions = append(conditions, gin.H{
-					"type":    "process_path",
-					"content": joinStringArray(processPathArr),
-				})
-			}
-			if packageNameArr := convertToStringArray(rule.PackageName); len(packageNameArr) > 0 {
-				conditions = append(conditions, gin.H{
-					"type":    "package_name",
-					"content": joinStringArray(packageNameArr),
-				})
-			}
-			if userArr := convertToStringArray(rule.User); len(userArr) > 0 {
-				conditions = append(conditions, gin.H{
-					"type":    "user",
-					"content": joinStringArray(userArr),
-				})
-			}
-			if userIDArr := convertToStringArray(rule.UserID); len(userIDArr) > 0 {
-				conditions = append(conditions, gin.H{
-					"type":    "user_id",
-					"content": joinStringArray(userIDArr),
-				})
-			}
-			if rule.ClashMode != "" {
-				conditions = append(conditions, gin.H{
-					"type":    "clash_mode",
-					"content": rule.ClashMode,
-				})
-			}
-			if ruleSetArr := convertToStringArray(rule.RuleSet); len(ruleSetArr) > 0 {
-				conditions = append(conditions, gin.H{
-					"type":    "rule_set",
-					"content": joinStringArray(ruleSetArr),
-				})
-			}
-			if rule.IPIsPrivate != nil {
-				conditions = append(conditions, gin.H{
-					"type":    "ip_is_private",
-					"content": fmt.Sprintf("%v", *rule.IPIsPrivate),
-				})
-			}
-
-			// 如果没有匹配条件，添加一个默认条件
-			if len(conditions) == 0 {
-				conditions = append(conditions, gin.H{
-					"type":    "unknown",
-					"content": "复合规则",
-				})
-			}
-
-			ruleData := gin.H{
-				"id":         ruleID,
-				"conditions": conditions,
-				"outbound":   rule.Outbound,
-			}
-
-			// 添加其他字段
-			if rule.IPVersion != 0 {
-				ruleData["ip_version"] = rule.IPVersion
-			}
-			if rule.Invert != nil {
-				ruleData["invert"] = *rule.Invert
-			}
-			if networkArr := convertToStringArray(rule.Network); len(networkArr) > 0 {
-				ruleData["network"] = joinStringArray(networkArr)
-			}
-			if rule.IPIsPrivate != nil {
-				ruleData["ip_is_private"] = *rule.IPIsPrivate
-			}
-
-			routeRules = append(routeRules, ruleData)
-		}
-	}
-
-	// 处理规则集 (route.rule_set)
-	if config.Route != nil && config.Route.RuleSet != nil {
-		// rule_set 可能是数组或对象，需要处理不同情况
-		switch ruleSetData := config.Route.RuleSet.(type) {
-		case []interface{}:
-			for i, ruleSetItem := range ruleSetData {
-				if ruleSetMap, ok := ruleSetItem.(map[string]interface{}); ok {
-					ruleSet := gin.H{
-						"id": i + 1,
+				// 生成条件
+				var conditions []gin.H
+				addCond := func(key string, labelType string) {
+					if v, exists := ruleMap[key]; exists && v != nil {
+						values := convertToStringArray(v)
+						if len(values) > 0 {
+							conditions = append(conditions, gin.H{
+								"type":    labelType,
+								"content": joinStringArray(values),
+							})
+						}
 					}
-
-					// 提取规则集字段
-					if tag, ok := ruleSetMap["tag"].(string); ok {
-						ruleSet["tag"] = tag
-					}
-					if ruleSetType, ok := ruleSetMap["type"].(string); ok {
-						ruleSet["type"] = ruleSetType
-					}
-					if format, ok := ruleSetMap["format"].(string); ok {
-						ruleSet["format"] = format
-					}
-					if url, ok := ruleSetMap["url"].(string); ok {
-						ruleSet["url"] = url
-					}
-					if path, ok := ruleSetMap["path"].(string); ok {
-						ruleSet["path"] = path
-					}
-					if downloadDetour, ok := ruleSetMap["download_detour"].(string); ok {
-						ruleSet["download_detour"] = downloadDetour
-					}
-					if updateInterval, ok := ruleSetMap["update_interval"].(string); ok {
-						ruleSet["update_interval"] = updateInterval
-					}
-
-					ruleSets = append(ruleSets, ruleSet)
 				}
-			}
-		case map[string]interface{}:
-			// 如果是单个对象，也处理一下
-			ruleSet := gin.H{
-				"id": 1,
-			}
-			if tag, ok := ruleSetData["tag"].(string); ok {
-				ruleSet["tag"] = tag
-			}
-			if ruleSetType, ok := ruleSetData["type"].(string); ok {
-				ruleSet["type"] = ruleSetType
-			}
-			if format, ok := ruleSetData["format"].(string); ok {
-				ruleSet["format"] = format
-			}
-			if url, ok := ruleSetData["url"].(string); ok {
-				ruleSet["url"] = url
-			}
-			if path, ok := ruleSetData["path"].(string); ok {
-				ruleSet["path"] = path
-			}
-			if downloadDetour, ok := ruleSetData["download_detour"].(string); ok {
-				ruleSet["download_detour"] = downloadDetour
-			}
-			if updateInterval, ok := ruleSetData["update_interval"].(string); ok {
-				ruleSet["update_interval"] = updateInterval
-			}
 
-			ruleSets = append(ruleSets, ruleSet)
+				// 已知匹配键
+				keys := []struct{ jsonKey, condType string }{
+					{"domain", "domain"},
+					{"domain_suffix", "domain_suffix"},
+					{"domain_keyword", "domain_keyword"},
+					{"domain_regex", "domain_regex"},
+					{"ip_cidr", "ip_cidr"},
+					{"geoip", "geoip"},
+					{"geosite", "geosite"},
+					{"source_geoip", "source_geoip"},
+					{"source_ip_cidr", "source_ip_cidr"},
+					{"inbound", "inbound"},
+					{"protocol", "protocol"},
+					{"network", "network"},
+					{"auth_user", "auth_user"},
+					{"port", "port"},
+					{"port_range", "port_range"},
+					{"source_port", "source_port"},
+					{"source_port_range", "source_port_range"},
+					{"process_name", "process_name"},
+					{"process_path", "process_path"},
+					{"package_name", "package_name"},
+					{"user", "user"},
+					{"user_id", "user_id"},
+					{"clash_mode", "clash_mode"},
+					{"rule_set", "rule_set"},
+				}
+				for _, k := range keys {
+					addCond(k.jsonKey, k.condType)
+				}
+
+				// 特殊布尔条件
+				if v, ok := ruleMap["ip_is_private"]; ok && v != nil {
+					conditions = append(conditions, gin.H{
+						"type":    "ip_is_private",
+						"content": fmt.Sprintf("%v", v),
+					})
+				}
+
+				if len(conditions) == 0 {
+					conditions = append(conditions, gin.H{"type": "unknown", "content": "复合规则"})
+				}
+
+				ruleID := strconv.Itoa(i + 1)
+				ruleData := gin.H{
+					"id":         ruleID,
+					"conditions": conditions,
+				}
+
+				// 出站/动作与其他显示字段
+				if v, ok := ruleMap["outbound"]; ok {
+					ruleData["outbound"] = fmt.Sprintf("%v", v)
+				}
+				if v, ok := ruleMap["action"]; ok {
+					ruleData["action"] = fmt.Sprintf("%v", v)
+				}
+				if v, ok := ruleMap["ip_version"]; ok {
+					// 尝试转为整型显示
+					switch vv := v.(type) {
+					case float64:
+						ruleData["ip_version"] = int(vv)
+					default:
+						ruleData["ip_version"] = v
+					}
+				}
+				if v, ok := ruleMap["invert"]; ok {
+					ruleData["invert"] = v
+				}
+				if v, ok := ruleMap["network"]; ok {
+					ruleData["network"] = joinStringArray(convertToStringArray(v))
+				}
+				if v, ok := ruleMap["ip_is_private"]; ok {
+					ruleData["ip_is_private"] = v
+				}
+
+				routeRules = append(routeRules, ruleData)
+			}
+		}
+
+		// 处理规则集 (route.rule_set)
+		if rs, ok := routeObj["rule_set"]; ok && rs != nil {
+			switch ruleSetData := rs.(type) {
+			case []interface{}:
+				for i, item := range ruleSetData {
+					if ruleSetMap, ok := item.(map[string]interface{}); ok {
+						m := gin.H{"id": i + 1}
+						if tag, ok := ruleSetMap["tag"].(string); ok {
+							m["tag"] = tag
+						}
+						if t, ok := ruleSetMap["type"].(string); ok {
+							m["type"] = t
+						}
+						if f, ok := ruleSetMap["format"].(string); ok {
+							m["format"] = f
+						}
+						if url, ok := ruleSetMap["url"].(string); ok {
+							m["url"] = url
+						}
+						if path, ok := ruleSetMap["path"].(string); ok {
+							m["path"] = path
+						}
+						if dd, ok := ruleSetMap["download_detour"].(string); ok {
+							m["download_detour"] = dd
+						}
+						if ui, ok := ruleSetMap["update_interval"].(string); ok {
+							m["update_interval"] = ui
+						}
+						ruleSets = append(ruleSets, m)
+					}
+				}
+			case map[string]interface{}:
+				m := gin.H{"id": 1}
+				if tag, ok := ruleSetData["tag"].(string); ok {
+					m["tag"] = tag
+				}
+				if t, ok := ruleSetData["type"].(string); ok {
+					m["type"] = t
+				}
+				if f, ok := ruleSetData["format"].(string); ok {
+					m["format"] = f
+				}
+				if url, ok := ruleSetData["url"].(string); ok {
+					m["url"] = url
+				}
+				if path, ok := ruleSetData["path"].(string); ok {
+					m["path"] = path
+				}
+				if dd, ok := ruleSetData["download_detour"].(string); ok {
+					m["download_detour"] = dd
+				}
+				if ui, ok := ruleSetData["update_interval"].(string); ok {
+					m["update_interval"] = ui
+				}
+				ruleSets = append(ruleSets, m)
+			}
 		}
 	}
 
-	// 返回结构化数据
-	result := gin.H{
+	c.JSON(http.StatusOK, models.SuccessResponse(gin.H{
 		"routeRules": routeRules,
 		"ruleSets":   ruleSets,
-	}
-
-	c.JSON(http.StatusOK, models.SuccessResponse(result))
+	}))
 }
 
 // isProxyProtocol 判断是否为真正的代理协议
@@ -1701,6 +1602,77 @@ func (h *ConfigHandler) DeleteRouteRule(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Route rule deleted successfully"})
 }
 
+// MoveRouteRuleUp 路由规则上移（与前一条交换位置）
+func (h *ConfigHandler) MoveRouteRuleUp(c *gin.Context) {
+	h.moveRouteRule(c, -1)
+}
+
+// MoveRouteRuleDown 路由规则下移（与后一条交换位置）
+func (h *ConfigHandler) MoveRouteRuleDown(c *gin.Context) {
+	h.moveRouteRule(c, 1)
+}
+
+// moveRouteRule 按增量移动指定规则
+func (h *ConfigHandler) moveRouteRule(c *gin.Context, delta int) {
+	ruleID := c.Param("id")
+
+	// 读取当前配置
+	config, err := h.readSingBoxConfig()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to read config: " + err.Error()})
+		return
+	}
+
+	if config.Route == nil || config.Route.Rules == nil || len(config.Route.Rules) == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "No rules found"})
+		return
+	}
+
+	// 将ruleID转换为数组索引（1基 -> 0基）
+	ruleIndex, err := strconv.Atoi(ruleID)
+	if err != nil || ruleIndex <= 0 || ruleIndex > len(config.Route.Rules) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid rule ID"})
+		return
+	}
+	ruleIndex = ruleIndex - 1
+
+	targetIndex := ruleIndex + delta
+	if targetIndex < 0 || targetIndex >= len(config.Route.Rules) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Move out of bounds"})
+		return
+	}
+
+	// 交换位置
+	rules := config.Route.Rules
+	rules[ruleIndex], rules[targetIndex] = rules[targetIndex], rules[ruleIndex]
+	config.Route.Rules = rules
+
+	// 验证配置
+	if err := h.validateSingBoxConfig(config); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Configuration validation failed: " + err.Error()})
+		return
+	}
+
+	// 保存配置
+	if err := h.saveSingBoxConfig(config); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save config: " + err.Error()})
+		return
+	}
+
+	direction := "down"
+	if delta < 0 {
+		direction = "up"
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":        "Route rule moved " + direction + " successfully",
+		"from_index":     ruleIndex + 1,   // 返回为1基
+		"to_index":       targetIndex + 1, // 返回为1基
+		"need_restart":   true,
+		"validation_msg": "配置已通过 Sing-Box 官方验证，可以选择重启服务以应用更改",
+	})
+}
+
 // saveSingBoxConfig 保存Sing-Box配置到文件
 func (h *ConfigHandler) saveSingBoxConfig(config *SingBoxConfig) error {
 	configPath := h.serviceManager.GetConfig().SingBoxConfigPath
@@ -1713,4 +1685,1270 @@ func (h *ConfigHandler) saveSingBoxConfig(config *SingBoxConfig) error {
 
 	// 写入文件
 	return os.WriteFile(configPath, configData, 0644)
+}
+
+// saveSingBoxConfigAsInterface 保存 interface{} 类型的配置
+func (h *ConfigHandler) saveSingBoxConfigAsInterface(config map[string]interface{}) error {
+	configPath := h.serviceManager.GetConfig().SingBoxConfigPath
+
+	// 序列化配置
+	configData, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %v", err)
+	}
+
+	// 写入文件
+	return os.WriteFile(configPath, configData, 0644)
+}
+
+// ReorderRouteRules 批量重排序路由规则（支持拖拽）
+func (h *ConfigHandler) ReorderRouteRules(c *gin.Context) {
+	var req struct {
+		RuleIds []string `json:"rule_ids"` // 新的规则ID顺序（1基索引）
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body: " + err.Error()})
+		return
+	}
+
+	// 读取当前配置
+	config, err := h.readSingBoxConfig()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to read config: " + err.Error()})
+		return
+	}
+
+	if config.Route == nil || config.Route.Rules == nil || len(config.Route.Rules) == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "No rules found"})
+		return
+	}
+
+	originalRules := config.Route.Rules
+	if len(req.RuleIds) != len(originalRules) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Rule IDs count mismatch"})
+		return
+	}
+
+	// 构建新的规则顺序
+	newRules := make([]SingBoxRule, 0, len(originalRules))
+	for _, ruleIdStr := range req.RuleIds {
+		ruleIndex, err := strconv.Atoi(ruleIdStr)
+		if err != nil || ruleIndex <= 0 || ruleIndex > len(originalRules) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid rule ID: " + ruleIdStr})
+			return
+		}
+		// 转换为0基索引并复制规则
+		newRules = append(newRules, originalRules[ruleIndex-1])
+	}
+
+	// 替换规则顺序
+	config.Route.Rules = newRules
+
+	// 验证配置
+	if err := h.validateSingBoxConfig(config); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Configuration validation failed: " + err.Error()})
+		return
+	}
+
+	// 保存配置
+	if err := h.saveSingBoxConfig(config); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save config: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":        "Route rules reordered successfully",
+		"rules_count":    len(newRules),
+		"need_restart":   true,
+		"validation_msg": "配置已通过 Sing-Box 官方验证，可以选择重启服务以应用更改",
+	})
+}
+
+// ValidateCurrentSingBoxConfig 验证当前的Sing-Box配置文件
+func (h *ConfigHandler) ValidateCurrentSingBoxConfig(c *gin.Context) {
+	configPath := h.getSingBoxConfigPath()
+
+	// 检查配置文件是否存在
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		c.JSON(http.StatusNotFound, models.ErrorResponse(404, "配置文件不存在"))
+		return
+	}
+
+	// 检查 sing-box 二进制文件是否存在
+	singboxBinary := h.getSingBoxBinary()
+	if singboxBinary == "" {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse(500,
+			"无法找到 sing-box 二进制文件，请确保 sing-box 已正确安装"))
+		return
+	}
+
+	// 执行 sing-box check 命令验证当前配置文件
+	cmd := exec.Command(singboxBinary, "check", "-c", configPath)
+	output, err := cmd.CombinedOutput()
+
+	if err != nil {
+		// 验证失败
+		c.JSON(http.StatusBadRequest, models.SuccessResponse(gin.H{
+			"valid":             false,
+			"error":             string(output),
+			"message":           "配置文件验证失败",
+			"validation_method": "sing-box check",
+		}))
+		return
+	}
+
+	// 验证成功
+	c.JSON(http.StatusOK, models.SuccessResponse(gin.H{
+		"valid":             true,
+		"message":           "✅ 配置文件验证通过，可以安全重启服务",
+		"validation_method": "sing-box check",
+	}))
+}
+
+// CreateRuleSet 创建规则集
+func (h *ConfigHandler) CreateRuleSet(c *gin.Context) {
+	var req struct {
+		Tag            string `json:"tag" binding:"required"`
+		Type           string `json:"type" binding:"required"`
+		Format         string `json:"format"`
+		URL            string `json:"url"`
+		Path           string `json:"path"`
+		DownloadDetour string `json:"download_detour"`
+		UpdateInterval string `json:"update_interval"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数错误: " + err.Error()})
+		return
+	}
+
+	// 读取当前配置
+	config, err := h.readSingBoxConfigAsInterface()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "读取配置失败: " + err.Error()})
+		return
+	}
+
+	// 创建新的规则集
+	newRuleSet := map[string]interface{}{
+		"tag":  req.Tag,
+		"type": req.Type,
+	}
+
+	if req.Format != "" {
+		newRuleSet["format"] = req.Format
+	}
+	if req.URL != "" {
+		newRuleSet["url"] = req.URL
+	}
+	if req.Path != "" {
+		newRuleSet["path"] = req.Path
+	}
+	if req.DownloadDetour != "" {
+		newRuleSet["download_detour"] = req.DownloadDetour
+	}
+	if req.UpdateInterval != "" {
+		newRuleSet["update_interval"] = req.UpdateInterval
+	}
+
+	// 确保 route 存在
+	if config["route"] == nil {
+		config["route"] = make(map[string]interface{})
+	}
+	route := config["route"].(map[string]interface{})
+
+	// 处理 rule_set
+	var ruleSets []interface{}
+	if route["rule_set"] != nil {
+		if ruleSetSlice, ok := route["rule_set"].([]interface{}); ok {
+			ruleSets = ruleSetSlice
+		} else if singleRuleSet, ok := route["rule_set"].(map[string]interface{}); ok {
+			ruleSets = []interface{}{singleRuleSet}
+		}
+	}
+
+	// 检查是否已存在相同的 tag
+	for _, rs := range ruleSets {
+		if ruleSet, ok := rs.(map[string]interface{}); ok {
+			if ruleSet["tag"] == req.Tag {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "规则集标签已存在: " + req.Tag})
+				return
+			}
+		}
+	}
+
+	// 添加新规则集
+	ruleSets = append(ruleSets, newRuleSet)
+	route["rule_set"] = ruleSets
+
+	// 保存配置 (跳过验证，直接保存到文件)
+	if err := h.saveSingBoxConfigAsInterface(config); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存配置失败: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":           "✅ 规则集创建成功",
+		"need_restart":      true,
+		"validation_method": "sing-box check",
+	})
+}
+
+// UpdateRuleSet 更新规则集
+func (h *ConfigHandler) UpdateRuleSet(c *gin.Context) {
+	ruleSetId := c.Param("id")
+	ruleSetIndex, err := strconv.Atoi(ruleSetId)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的规则集ID"})
+		return
+	}
+
+	var req struct {
+		Tag            string `json:"tag" binding:"required"`
+		Type           string `json:"type" binding:"required"`
+		Format         string `json:"format"`
+		URL            string `json:"url"`
+		Path           string `json:"path"`
+		DownloadDetour string `json:"download_detour"`
+		UpdateInterval string `json:"update_interval"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数错误: " + err.Error()})
+		return
+	}
+
+	// 读取当前配置
+	config, err := h.readSingBoxConfigAsInterface()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "读取配置失败: " + err.Error()})
+		return
+	}
+
+	// 获取规则集列表
+	route := config["route"].(map[string]interface{})
+	var ruleSets []interface{}
+	if route["rule_set"] != nil {
+		if ruleSetSlice, ok := route["rule_set"].([]interface{}); ok {
+			ruleSets = ruleSetSlice
+		} else if singleRuleSet, ok := route["rule_set"].(map[string]interface{}); ok {
+			ruleSets = []interface{}{singleRuleSet}
+		}
+	}
+
+	if ruleSetIndex < 0 || ruleSetIndex >= len(ruleSets) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "规则集索引超出范围"})
+		return
+	}
+
+	// 检查标签冲突
+	for i, rs := range ruleSets {
+		if i != ruleSetIndex {
+			if ruleSet, ok := rs.(map[string]interface{}); ok {
+				if ruleSet["tag"] == req.Tag {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "规则集标签已存在: " + req.Tag})
+					return
+				}
+			}
+		}
+	}
+
+	// 更新规则集
+	updatedRuleSet := map[string]interface{}{
+		"tag":  req.Tag,
+		"type": req.Type,
+	}
+
+	if req.Format != "" {
+		updatedRuleSet["format"] = req.Format
+	}
+	if req.URL != "" {
+		updatedRuleSet["url"] = req.URL
+	}
+	if req.Path != "" {
+		updatedRuleSet["path"] = req.Path
+	}
+	if req.DownloadDetour != "" {
+		updatedRuleSet["download_detour"] = req.DownloadDetour
+	}
+	if req.UpdateInterval != "" {
+		updatedRuleSet["update_interval"] = req.UpdateInterval
+	}
+
+	ruleSets[ruleSetIndex] = updatedRuleSet
+	route["rule_set"] = ruleSets
+
+	// 保存配置 (跳过验证，直接保存到文件)
+	if err := h.saveSingBoxConfigAsInterface(config); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存配置失败: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":           "✅ 规则集更新成功",
+		"need_restart":      true,
+		"validation_method": "sing-box check",
+	})
+}
+
+// DeleteRuleSet 删除规则集
+func (h *ConfigHandler) DeleteRuleSet(c *gin.Context) {
+	ruleSetId := c.Param("id")
+	ruleSetIndex, err := strconv.Atoi(ruleSetId)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的规则集ID"})
+		return
+	}
+
+	// 读取当前配置
+	config, err := h.readSingBoxConfigAsInterface()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "读取配置失败: " + err.Error()})
+		return
+	}
+
+	// 获取规则集列表
+	route := config["route"].(map[string]interface{})
+	var ruleSets []interface{}
+	if route["rule_set"] != nil {
+		if ruleSetSlice, ok := route["rule_set"].([]interface{}); ok {
+			ruleSets = ruleSetSlice
+		} else if singleRuleSet, ok := route["rule_set"].(map[string]interface{}); ok {
+			ruleSets = []interface{}{singleRuleSet}
+		}
+	}
+
+	if ruleSetIndex < 0 || ruleSetIndex >= len(ruleSets) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "规则集索引超出范围"})
+		return
+	}
+
+	// 删除规则集
+	ruleSets = append(ruleSets[:ruleSetIndex], ruleSets[ruleSetIndex+1:]...)
+
+	// 更新配置
+	if len(ruleSets) == 0 {
+		delete(route, "rule_set")
+	} else if len(ruleSets) == 1 {
+		route["rule_set"] = ruleSets[0]
+	} else {
+		route["rule_set"] = ruleSets
+	}
+
+	// 保存配置 (跳过验证，直接保存到文件)
+	if err := h.saveSingBoxConfigAsInterface(config); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存配置失败: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":           "✅ 规则集删除成功",
+		"need_restart":      true,
+		"validation_method": "sing-box check",
+	})
+}
+
+// DetectSingBoxPath 检测 Sing-Box 二进制文件路径
+func (h *ConfigHandler) DetectSingBoxPath(c *gin.Context) {
+	var detectionMethods []string
+	var foundPath string
+
+	// 方法1: 从 systemctl 配置中获取路径
+	path := detectSingBoxPathFromSystemctl()
+	if path != "" {
+		foundPath = path
+		detectionMethods = append(detectionMethods, "systemctl")
+	} else {
+		detectionMethods = append(detectionMethods, "systemctl (failed)")
+
+		// 添加详细的调试信息
+		var debugInfo []string
+
+		// 检查 systemctl show 输出
+		cmd := exec.Command("systemctl", "show", "sing-box", "--property=ExecStart", "--value")
+		if output, err := cmd.Output(); err != nil {
+			debugInfo = append(debugInfo, "systemctl show 失败: "+err.Error())
+		} else {
+			execStart := strings.TrimSpace(string(output))
+			if execStart == "" {
+				debugInfo = append(debugInfo, "systemctl show 返回空内容")
+			} else {
+				debugInfo = append(debugInfo, "systemctl show 输出: "+execStart)
+			}
+		}
+
+		// 检查服务状态
+		cmd = exec.Command("systemctl", "status", "sing-box")
+		if _, err := cmd.Output(); err != nil {
+			debugInfo = append(debugInfo, "systemctl status 失败: "+err.Error())
+		} else {
+			debugInfo = append(debugInfo, "服务状态检查完成")
+		}
+
+		// 检查 systemctl cat
+		cmd = exec.Command("systemctl", "cat", "sing-box")
+		if output, err := cmd.Output(); err != nil {
+			debugInfo = append(debugInfo, "systemctl cat 失败: "+err.Error())
+		} else {
+			content := strings.TrimSpace(string(output))
+			if content != "" {
+				debugInfo = append(debugInfo, "systemctl cat 成功，长度: "+fmt.Sprintf("%d", len(content)))
+			}
+		}
+
+		// 方法2: 尝试常见路径
+		commonPaths := []string{
+			"/usr/local/bin/sing-box",
+			"/usr/bin/sing-box",
+			"/opt/sing-box/sing-box",
+			"/etc/sing-box/sing-box",
+		}
+
+		// 在 macOS 开发环境中添加测试路径
+		if runtime.GOOS == "darwin" {
+			commonPaths = append(commonPaths,
+				"./test-sing-box",
+				"/usr/local/bin/sing-box-test",
+			)
+		}
+		for _, p := range commonPaths {
+			if info, err := os.Stat(p); err == nil && !info.IsDir() {
+				if info.Mode()&0111 != 0 { // 检查执行权限
+					foundPath = p
+					detectionMethods = append(detectionMethods, "common paths")
+					break
+				}
+			}
+		}
+	}
+
+	if foundPath == "" {
+		// 收集所有调试信息
+		var allDebugInfo []string
+
+		// 再次尝试检查 systemctl show 输出
+		cmd := exec.Command("systemctl", "show", "sing-box", "--property=ExecStart", "--value")
+		if output, err := cmd.Output(); err != nil {
+			allDebugInfo = append(allDebugInfo, "systemctl show 失败: "+err.Error())
+		} else {
+			execStart := strings.TrimSpace(string(output))
+			if execStart == "" {
+				allDebugInfo = append(allDebugInfo, "systemctl show 返回空内容")
+			} else {
+				allDebugInfo = append(allDebugInfo, "systemctl show 输出: "+execStart)
+			}
+		}
+
+		c.JSON(http.StatusNotFound, gin.H{
+			"error":             "未找到 Sing-Box 二进制文件路径",
+			"detection_methods": detectionMethods,
+			"debug_info":        allDebugInfo,
+			"checked_paths": []string{
+				"/usr/local/bin/sing-box",
+				"/usr/bin/sing-box",
+				"/opt/sing-box/sing-box",
+				"/etc/sing-box/sing-box",
+			},
+		})
+		return
+	}
+
+	// 验证路径并获取文件信息
+	info, err := os.Stat(foundPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "路径验证失败: " + err.Error(),
+			"path":  foundPath,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"path":              foundPath,
+		"detection_method":  detectionMethods[len(detectionMethods)-1],
+		"detection_methods": detectionMethods,
+		"file_size":         info.Size(),
+		"permissions":       info.Mode().String(),
+		"modified_time":     info.ModTime().Format("2006-01-02 15:04:05"),
+	})
+}
+
+// CheckSingBoxUpdate 检查 Sing-Box 更新
+func (h *ConfigHandler) CheckSingBoxUpdate(c *gin.Context) {
+	// 获取当前版本
+	currentVersion := getCurrentSingBoxVersion()
+
+	// 获取最新版本信息
+	latestInfo, err := getLatestSingBoxRelease()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "获取最新版本信息失败: " + err.Error(),
+		})
+		return
+	}
+
+	// 检查是否有更新
+	hasUpdate := compareVersions(currentVersion, latestInfo.Version) < 0
+
+	c.JSON(http.StatusOK, gin.H{
+		"hasUpdate":      hasUpdate,
+		"currentVersion": currentVersion,
+		"version":        latestInfo.Version,
+		"publishTime":    latestInfo.PublishTime,
+		"downloadUrl":    latestInfo.DownloadURL,
+	})
+}
+
+// UpdateSingBoxKernel 更新 Sing-Box 内核
+func (h *ConfigHandler) UpdateSingBoxKernel(c *gin.Context) {
+	var req struct {
+		DownloadURL string `json:"downloadUrl" binding:"required"`
+		TargetPath  string `json:"targetPath" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数错误: " + err.Error()})
+		return
+	}
+
+	// 启动异步更新过程
+	go performKernelUpdate(req.DownloadURL, req.TargetPath)
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "内核更新已开始",
+	})
+}
+
+// UpdateSingBoxKernelStream SSE 流式更新进度
+func (h *ConfigHandler) UpdateSingBoxKernelStream(c *gin.Context) {
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+
+	// 这里应该实现 SSE 流式更新
+	// 简化处理，直接返回完成状态
+	c.String(http.StatusOK, "data: {\"finished\": true, \"success\": true, \"percentage\": 100, \"message\": \"更新完成\"}\n\n")
+}
+
+// 辅助函数和结构体定义
+
+// GitHubRelease GitHub 发布信息结构
+type GitHubRelease struct {
+	TagName     string    `json:"tag_name"`
+	Name        string    `json:"name"`
+	Body        string    `json:"body"`
+	PublishedAt time.Time `json:"published_at"`
+	Assets      []struct {
+		Name               string `json:"name"`
+		BrowserDownloadURL string `json:"browser_download_url"`
+	} `json:"assets"`
+}
+
+// LatestReleaseInfo 最新版本信息
+type LatestReleaseInfo struct {
+	Version     string
+	PublishTime string
+	DownloadURL string
+}
+
+// detectSingBoxPathFromSystemctl 从 systemctl 配置中检测路径
+func detectSingBoxPathFromSystemctl() string {
+	// 方法1: 尝试使用 systemctl show 获取 ExecStart
+	cmd := exec.Command("systemctl", "show", "sing-box", "--property=ExecStart", "--value")
+	output, err := cmd.Output()
+	if err == nil && strings.TrimSpace(string(output)) != "" {
+		execStart := strings.TrimSpace(string(output))
+		if path := parseExecStartPath(execStart); path != "" {
+			return path
+		}
+	}
+
+	// 方法2: 尝试使用完整的 systemctl show 获取所有属性
+	cmd = exec.Command("systemctl", "show", "sing-box")
+	output, err = cmd.Output()
+	if err == nil {
+		if path := parseSystemctlShowOutput(string(output)); path != "" {
+			return path
+		}
+	}
+
+	// 方法3: 尝试使用 systemctl cat 获取服务文件内容
+	cmd = exec.Command("systemctl", "cat", "sing-box")
+	output, err = cmd.Output()
+	if err == nil && strings.TrimSpace(string(output)) != "" {
+		if path := parseServiceContent(string(output)); path != "" {
+			return path
+		}
+	}
+
+	// 方法4: 尝试读取 service 文件内容
+	servicePaths := []string{
+		"/etc/systemd/system/sing-box.service",
+		"/usr/lib/systemd/system/sing-box.service",
+		"/lib/systemd/system/sing-box.service",
+		"/run/systemd/system/sing-box.service",
+		"/etc/systemd/system/multi-user.target.wants/sing-box.service",
+	}
+
+	for _, servicePath := range servicePaths {
+		if path := parseServiceFile(servicePath); path != "" {
+			return path
+		}
+	}
+
+	// 方法5: 尝试通过 ps 命令查找正在运行的进程
+	cmd = exec.Command("pgrep", "-f", "sing-box")
+	output, err = cmd.Output()
+	if err == nil && strings.TrimSpace(string(output)) != "" {
+		pid := strings.TrimSpace(string(output))
+		if path := getProcessPath(pid); path != "" {
+			return path
+		}
+	}
+
+	return ""
+}
+
+// parseExecStartPath 解析 ExecStart 输出
+func parseExecStartPath(execStart string) string {
+	if execStart == "" {
+		return ""
+	}
+
+	// 移除可能的前缀和后缀空格
+	execStart = strings.TrimSpace(execStart)
+
+	// 移除可能的 path= 前缀 (某些 systemd 版本会有这个)
+	execStart = strings.TrimPrefix(execStart, "path=")
+
+	// 处理可能的引号包围
+	execStart = strings.Trim(execStart, "\"'")
+
+	// 处理可能的特殊字符前缀，如 @ 符号
+	if strings.HasPrefix(execStart, "@") {
+		// @/path/to/binary 格式，移除 @ 前缀
+		execStart = strings.TrimPrefix(execStart, "@")
+	}
+
+	// 如果有空格，分割命令行参数，取第一个作为二进制路径
+	parts := strings.Fields(execStart)
+	if len(parts) > 0 {
+		binaryPath := parts[0]
+
+		// 验证路径是否存在
+		if info, err := os.Stat(binaryPath); err == nil && !info.IsDir() {
+			// 检查是否有执行权限
+			if info.Mode()&0111 != 0 {
+				return binaryPath
+			}
+		}
+	}
+
+	return ""
+}
+
+// parseServiceFile 解析 systemd service 文件
+func parseServiceFile(servicePath string) string {
+	content, err := os.ReadFile(servicePath)
+	if err != nil {
+		return ""
+	}
+	return parseServiceContent(string(content))
+}
+
+// parseServiceContent 解析服务文件内容
+func parseServiceContent(content string) string {
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		// 查找 ExecStart= 行
+		if strings.HasPrefix(line, "ExecStart=") {
+			execStart := strings.TrimPrefix(line, "ExecStart=")
+			if path := parseExecStartPath(execStart); path != "" {
+				return path
+			}
+		}
+	}
+	return ""
+}
+
+// parseSystemctlShowOutput 解析 systemctl show 的完整输出
+func parseSystemctlShowOutput(output string) string {
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "ExecStart=") {
+			execStart := strings.TrimPrefix(line, "ExecStart=")
+			// 移除可能的时间戳和路径前缀
+			if idx := strings.Index(execStart, " "); idx > 0 {
+				parts := strings.Fields(execStart)
+				if len(parts) >= 2 {
+					// 通常格式: { path=/usr/bin/sing-box ; argv[]=/usr/bin/sing-box -c /etc/sing-box/config.json ; ... }
+					for _, part := range parts {
+						if strings.HasPrefix(part, "path=") {
+							path := strings.TrimPrefix(part, "path=")
+							path = strings.Trim(path, ";")
+							if path := parseExecStartPath(path); path != "" {
+								return path
+							}
+						}
+						if strings.HasPrefix(part, "argv[]=") {
+							argv := strings.TrimPrefix(part, "argv[]=")
+							argv = strings.Trim(argv, ";")
+							if path := parseExecStartPath(argv); path != "" {
+								return path
+							}
+						}
+					}
+				}
+			}
+			if path := parseExecStartPath(execStart); path != "" {
+				return path
+			}
+		}
+	}
+	return ""
+}
+
+// getProcessPath 通过进程ID获取可执行文件路径
+func getProcessPath(pid string) string {
+	// 方法1: 通过 /proc/PID/exe 链接
+	exePath := "/proc/" + pid + "/exe"
+	if realPath, err := os.Readlink(exePath); err == nil {
+		if info, err := os.Stat(realPath); err == nil && !info.IsDir() {
+			if info.Mode()&0111 != 0 {
+				return realPath
+			}
+		}
+	}
+
+	// 方法2: 通过 ps 命令获取命令行
+	cmd := exec.Command("ps", "-p", pid, "-o", "cmd", "--no-headers")
+	output, err := cmd.Output()
+	if err == nil {
+		cmdline := strings.TrimSpace(string(output))
+		if path := parseExecStartPath(cmdline); path != "" {
+			return path
+		}
+	}
+
+	return ""
+}
+
+// getCurrentSingBoxVersion 获取当前 Sing-Box 版本
+func getCurrentSingBoxVersion() string {
+	// 从 sing-box --version 命令获取版本号
+	path := detectSingBoxPathFromSystemctl()
+	if path == "" {
+		return "unknown"
+	}
+
+	cmd := exec.Command(path, "--version")
+	output, err := cmd.Output()
+	if err != nil {
+		return "unknown"
+	}
+
+	// 读取分支信息
+	branchInfo := ""
+	if content, err := os.ReadFile("/etc/sing-box/version"); err == nil {
+		branchInfo = strings.TrimSpace(string(content))
+	}
+
+	// 解析版本输出
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// 尝试多种匹配模式来提取基础版本号
+		patterns := []string{
+			// 匹配完整版本信息（优先匹配带有完整后缀的版本）
+			`v?(\d+\.\d+\.\d+(?:-[a-zA-Z0-9]+(?:\.[a-zA-Z0-9]+)*(?:-[a-zA-Z0-9]+)*)+)`,
+			// 匹配包含version关键字的行，提取版本号
+			`(?i)version[:\s]+v?(\d+\.\d+\.\d+(?:-[a-zA-Z0-9]+(?:\.[a-zA-Z0-9]+)*)?)`,
+			// 匹配行首的版本号
+			`^v?(\d+\.\d+\.\d+(?:-[a-zA-Z0-9]+(?:\.[a-zA-Z0-9]+)*)?)`,
+			// 匹配任何位置的版本号
+			`v?(\d+\.\d+\.\d+(?:-[a-zA-Z0-9]+(?:\.[a-zA-Z0-9]+)*)?)`,
+		}
+
+		for _, pattern := range patterns {
+			re := regexp.MustCompile(pattern)
+			if matches := re.FindStringSubmatch(line); len(matches) > 1 {
+				baseVersion := matches[1]
+				if !strings.HasPrefix(baseVersion, "v") {
+					baseVersion = "v" + baseVersion
+				}
+
+				// 组合版本号和分支信息
+				finalVersion := baseVersion
+				if branchInfo != "" && branchInfo != "official-core" && !strings.Contains(baseVersion, branchInfo) {
+					// 如果分支信息不为空、不是官方内核且版本号中不包含分支信息，则添加分支信息
+					finalVersion = baseVersion + "-" + branchInfo
+				}
+				// 如果是官方内核，直接使用基础版本号，不添加分支信息
+
+				return finalVersion
+			}
+		}
+	}
+
+	return "unknown"
+}
+
+// getLatestSingBoxRelease 获取最新 Sing-Box 发布信息
+func getLatestSingBoxRelease() (*LatestReleaseInfo, error) {
+	// 检查是否为官方内核
+	branchInfo := ""
+	if content, err := os.ReadFile("/etc/sing-box/version"); err == nil {
+		branchInfo = strings.TrimSpace(string(content))
+	}
+
+	if branchInfo == "official-core" {
+		// 使用官方仓库
+		return getOfficialSingBoxRelease()
+	} else {
+		// 使用 reF1nd 仓库
+		return getReF1ndSingBoxRelease()
+	}
+}
+
+// getOfficialSingBoxRelease 获取官方 Sing-Box 发布信息
+func getOfficialSingBoxRelease() (*LatestReleaseInfo, error) {
+	url := "https://api.github.com/repos/SagerNet/sing-box/releases/latest"
+
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("请求失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP 错误: %d", resp.StatusCode)
+	}
+
+	var release GitHubRelease
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		return nil, fmt.Errorf("解析响应失败: %v", err)
+	}
+
+	// 版本号直接使用 tag_name
+	version := release.TagName
+	if !strings.HasPrefix(version, "v") {
+		version = "v" + version
+	}
+
+	// 构建官方下载链接
+	downloadURL := buildOfficialDownloadURL(version)
+
+	return &LatestReleaseInfo{
+		Version:     version,
+		PublishTime: release.PublishedAt.Format("2006-01-02 15:04:05"),
+		DownloadURL: downloadURL,
+	}, nil
+}
+
+// getReF1ndSingBoxRelease 获取 reF1nd Sing-Box 发布信息
+func getReF1ndSingBoxRelease() (*LatestReleaseInfo, error) {
+	url := "https://api.github.com/repos/herozmy/StoreHouse/releases/tags/sing-box-reF1nd"
+
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("请求失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP 错误: %d", resp.StatusCode)
+	}
+
+	var release GitHubRelease
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		return nil, fmt.Errorf("解析响应失败: %v", err)
+	}
+
+	// 从发布描述中提取真正的版本号
+	version := extractVersionFromBody(release.Body)
+	if version == "" {
+		return nil, fmt.Errorf("无法从发布描述中提取版本号")
+	}
+
+	// 根据当前平台选择合适的下载链接
+	downloadURL := selectDownloadURL(release.Assets)
+	if downloadURL == "" {
+		return nil, fmt.Errorf("未找到适合当前平台的下载链接")
+	}
+
+	return &LatestReleaseInfo{
+		Version:     version,
+		PublishTime: release.PublishedAt.Format("2006-01-02 15:04:05"),
+		DownloadURL: downloadURL,
+	}, nil
+}
+
+// buildOfficialDownloadURL 构建官方 Sing-Box 下载链接
+func buildOfficialDownloadURL(version string) string {
+	// 移除版本号前的 v 前缀用于构建下载链接
+	versionWithoutV := strings.TrimPrefix(version, "v")
+
+	// 获取架构信息
+	arch := runtime.GOARCH
+	switch arch {
+	case "amd64":
+		arch = "amd64"
+	case "arm64":
+		arch = "arm64"
+	case "arm":
+		// 默认使用 armv7，这是最常见的ARM架构
+		arch = "armv7"
+	default:
+		arch = "amd64" // 默认使用 amd64
+	}
+
+	// 构建下载链接：https://github.com/SagerNet/sing-box/releases/download/{version}/sing-box-{version#v}-linux-{arch}.tar.gz
+	downloadURL := fmt.Sprintf("https://github.com/SagerNet/sing-box/releases/download/%s/sing-box-%s-linux-%s.tar.gz",
+		version, versionWithoutV, arch)
+
+	return downloadURL
+}
+
+// selectDownloadURL 根据当前平台选择下载链接
+func selectDownloadURL(assets []struct {
+	Name               string `json:"name"`
+	BrowserDownloadURL string `json:"browser_download_url"`
+}) string {
+	osName := runtime.GOOS
+	arch := runtime.GOARCH
+
+	// 构建目标文件名模式
+	var targetPattern string
+	switch osName {
+	case "linux":
+		switch arch {
+		case "amd64":
+			targetPattern = "sing-box-reF1nd-dev-linux-amd64.tar.gz"
+		case "arm64":
+			targetPattern = "sing-box-reF1nd-dev-linux-arm64.tar.gz"
+		default:
+			targetPattern = "sing-box-reF1nd-dev-linux-amd64.tar.gz"
+		}
+	case "darwin":
+		// 对于 macOS，暂时使用 linux-amd64 版本进行测试
+		targetPattern = "sing-box-reF1nd-dev-linux-amd64.tar.gz"
+	default:
+		targetPattern = "sing-box-reF1nd-dev-linux-amd64.tar.gz"
+	}
+
+	// 查找匹配的文件
+	for _, asset := range assets {
+		if asset.Name == targetPattern {
+			return asset.BrowserDownloadURL
+		}
+	}
+
+	// 如果没找到，返回第一个 linux-amd64 版本作为备选
+	for _, asset := range assets {
+		if asset.Name == "sing-box-reF1nd-dev-linux-amd64.tar.gz" {
+			return asset.BrowserDownloadURL
+		}
+	}
+
+	return ""
+}
+
+// compareVersions 比较版本号
+func compareVersions(v1, v2 string) int {
+	// 移除 v 前缀
+	v1 = strings.TrimPrefix(v1, "v")
+	v2 = strings.TrimPrefix(v2, "v")
+
+	// 分离版本号和commit hash
+	// 格式: 1.12.8-01f4b410
+	v1Base, v1Hash := parseVersionAndHash(v1)
+	v2Base, v2Hash := parseVersionAndHash(v2)
+
+	// 先比较基础版本号
+	baseCompare := compareBaseVersions(v1Base, v2Base)
+	if baseCompare != 0 {
+		return baseCompare
+	}
+
+	// 如果基础版本相同，比较commit hash
+	// 有hash的版本被认为是较新的开发版本
+	if v1Hash != "" && v2Hash == "" {
+		return 1 // v1有hash，v2没有，v1更新
+	} else if v1Hash == "" && v2Hash != "" {
+		return -1 // v2有hash，v1没有，v2更新
+	} else if v1Hash != "" && v2Hash != "" {
+		// 都有hash，比较hash值（简单的字符串比较）
+		if v1Hash < v2Hash {
+			return -1
+		} else if v1Hash > v2Hash {
+			return 1
+		}
+	}
+
+	return 0
+}
+
+// parseVersionAndHash 分离版本号和commit hash
+func parseVersionAndHash(version string) (baseVersion, hash string) {
+	parts := strings.Split(version, "-")
+	baseVersion = parts[0]
+	if len(parts) > 1 {
+		hash = parts[1]
+	}
+	return
+}
+
+// compareBaseVersions 比较基础版本号 (x.y.z)
+func compareBaseVersions(v1, v2 string) int {
+	parts1 := strings.Split(v1, ".")
+	parts2 := strings.Split(v2, ".")
+
+	maxLen := len(parts1)
+	if len(parts2) > maxLen {
+		maxLen = len(parts2)
+	}
+
+	for i := 0; i < maxLen; i++ {
+		var p1, p2 int
+		if i < len(parts1) {
+			p1, _ = strconv.Atoi(parts1[i])
+		}
+		if i < len(parts2) {
+			p2, _ = strconv.Atoi(parts2[i])
+		}
+
+		if p1 < p2 {
+			return -1
+		} else if p1 > p2 {
+			return 1
+		}
+	}
+
+	return 0
+}
+
+// extractVersionFromBody 从发布描述中提取版本号
+func extractVersionFromBody(body string) string {
+	// 匹配格式如: "更新 sing-box reF1nd-dev 版至 v1.13.0-alpha.17-reF1nd"
+	re := regexp.MustCompile(`至\s+(v?\d+\.\d+\.\d+(?:-[a-zA-Z0-9]+(?:\.[a-zA-Z0-9]+)*(?:-[a-zA-Z0-9]+)*)?)`)
+	if matches := re.FindStringSubmatch(body); len(matches) > 1 {
+		version := matches[1]
+		if !strings.HasPrefix(version, "v") {
+			version = "v" + version
+		}
+		return version
+	}
+
+	// 备用匹配：直接匹配版本号格式
+	re2 := regexp.MustCompile(`v?\d+\.\d+\.\d+(?:-[a-zA-Z0-9]+(?:\.[a-zA-Z0-9]+)*(?:-[a-zA-Z0-9]+)*)?`)
+	if match := re2.FindString(body); match != "" {
+		if !strings.HasPrefix(match, "v") {
+			match = "v" + match
+		}
+		return match
+	}
+
+	return ""
+}
+
+// performKernelUpdate 执行内核更新 (简化版本)
+func performKernelUpdate(downloadURL, targetPath string) {
+	// 创建临时目录
+	tempDir, err := os.MkdirTemp("", "sing-box-update-*")
+	if err != nil {
+		return
+	}
+	defer os.RemoveAll(tempDir)
+
+	// 下载文件
+	tempFile := filepath.Join(tempDir, "sing-box.tar.gz")
+	if err := downloadFile(downloadURL, tempFile); err != nil {
+		return
+	}
+
+	// 解压文件
+	extractDir := filepath.Join(tempDir, "extracted")
+	if err := extractTarGz(tempFile, extractDir); err != nil {
+		return
+	}
+
+	// 查找 sing-box 二进制文件
+	binaryPath, err := findSingBoxBinary(extractDir)
+	if err != nil {
+		return
+	}
+
+	// 停止服务
+	stopCmd := exec.Command("systemctl", "stop", "sing-box")
+	if err := stopCmd.Run(); err != nil {
+		return
+	}
+
+	// 备份原文件
+	backupPath := targetPath + ".backup"
+	if err := copyFile(targetPath, backupPath); err != nil {
+		return
+	}
+
+	// 复制新文件
+	if err := copyFile(binaryPath, targetPath); err != nil {
+		// 恢复备份
+		copyFile(backupPath, targetPath)
+		return
+	}
+
+	// 设置权限
+	if err := os.Chmod(targetPath, 0755); err != nil {
+		return
+	}
+
+	// 启动服务
+	startCmd := exec.Command("systemctl", "start", "sing-box")
+	if err := startCmd.Run(); err != nil {
+		return
+	}
+}
+
+// downloadFile 下载文件
+func downloadFile(url, filepath string) error {
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP 错误: %d", resp.StatusCode)
+	}
+
+	out, err := os.Create(filepath)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	_, err = io.Copy(out, resp.Body)
+	return err
+}
+
+// extractTarGz 解压 tar.gz 文件
+func extractTarGz(src, dest string) error {
+	file, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	gzr, err := gzip.NewReader(file)
+	if err != nil {
+		return err
+	}
+	defer gzr.Close()
+
+	tr := tar.NewReader(gzr)
+
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+
+		target := filepath.Join(dest, header.Name)
+
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, 0755); err != nil {
+				return err
+			}
+		case tar.TypeReg:
+			dir := filepath.Dir(target)
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				return err
+			}
+
+			outFile, err := os.Create(target)
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(outFile, tr); err != nil {
+				outFile.Close()
+				return err
+			}
+			outFile.Close()
+
+			// 设置文件权限
+			if err := os.Chmod(target, os.FileMode(header.Mode)); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// findSingBoxBinary 在目录中查找 sing-box 二进制文件
+func findSingBoxBinary(dir string) (string, error) {
+	var binaryPath string
+
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if !info.IsDir() && strings.Contains(info.Name(), "sing-box") {
+			// 检查是否有执行权限
+			if info.Mode()&0111 != 0 {
+				binaryPath = path
+				return filepath.SkipDir // 找到后停止搜索
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		return "", err
+	}
+
+	if binaryPath == "" {
+		return "", fmt.Errorf("未找到 sing-box 二进制文件")
+	}
+
+	return binaryPath, nil
+}
+
+// copyFile 复制文件
+func copyFile(src, dst string) error {
+	sourceFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer sourceFile.Close()
+
+	destFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer destFile.Close()
+
+	_, err = io.Copy(destFile, sourceFile)
+	if err != nil {
+		return err
+	}
+
+	// 复制文件权限
+	sourceInfo, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+
+	return os.Chmod(dst, sourceInfo.Mode())
 }

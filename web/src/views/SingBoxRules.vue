@@ -4,6 +4,42 @@
       <h2>规则设置</h2>
     </div>
 
+    <!-- 保存/撤销操作栏 -->
+    <div v-if="hasUnsavedChanges" class="save-bar">
+      <div class="save-bar-content">
+        <div class="save-bar-info">
+          <el-icon class="warning-icon"><InfoFilled /></el-icon>
+          <span>您有未保存的规则排序更改</span>
+        </div>
+        <div class="save-bar-actions">
+          <el-button type="default" @click="cancelChanges" :loading="isReverting">
+            撤销更改
+          </el-button>
+          <el-button type="primary" @click="saveChanges" :loading="isSaving">
+            保存更改
+          </el-button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 重启服务提醒栏 -->
+    <div v-if="needsRestart" class="restart-bar">
+      <div class="restart-bar-content">
+        <div class="restart-bar-info">
+          <el-icon class="restart-icon"><RefreshRight /></el-icon>
+          <span>配置已保存，需要重启 Sing-Box 服务以应用更改</span>
+        </div>
+        <div class="restart-bar-actions">
+          <el-button type="success" @click="restartService" :loading="isRestarting">
+            重启服务
+          </el-button>
+          <el-button type="default" @click="dismissRestart">
+            稍后重启
+          </el-button>
+        </div>
+      </div>
+    </div>
+
     <!-- 服务状态 -->
     <ServiceStatus service-name="sing-box" />
 
@@ -22,7 +58,14 @@
             </div>
           </template>
 
-          <el-table :data="routeRules" stripe table-layout="auto" size="small">
+          <el-table 
+            :data="routeRules" 
+            stripe 
+            table-layout="auto" 
+            size="small"
+            ref="routeRulesTable"
+            :row-key="(row) => row.id"
+            @row-click="handleRowClick">
             <el-table-column type="index" label="序号" width="50" />
             <el-table-column label="匹配条件" min-width="200" show-overflow-tooltip>
               <template #default="scope">
@@ -57,9 +100,23 @@
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="140">
+            <el-table-column label="操作" width="220">
               <template #default="scope">
                 <div class="table-actions">
+                  <el-button 
+                    size="small" 
+                    :icon="ArrowUp"
+                    @click="moveRouteRuleUp(scope.row, scope.$index)"
+                    :disabled="scope.$index === 0 || hasUnsavedChanges"
+                    title="上移"
+                  />
+                  <el-button 
+                    size="small" 
+                    :icon="ArrowDown"
+                    @click="moveRouteRuleDown(scope.row, scope.$index)"
+                    :disabled="scope.$index === routeRules.length - 1 || hasUnsavedChanges"
+                    title="下移"
+                  />
                   <el-button 
                     type="primary" 
                     size="small" 
@@ -312,15 +369,112 @@
       </template>
     </el-dialog>
 
+    <!-- 规则集编辑对话框 -->
+    <el-dialog
+      v-model="showRuleSetDialog"
+      :title="editingRuleSet ? '编辑规则集' : '添加规则集'"
+      width="500px"
+      :close-on-click-modal="false">
+      
+      <el-form
+        ref="ruleSetFormRef"
+        :model="ruleSetForm"
+        label-width="120px"
+        :rules="ruleSetFormRules">
+        
+        <el-form-item label="标签 (Tag)" prop="tag">
+          <el-input
+            v-model="ruleSetForm.tag"
+            placeholder="请输入规则集标签，如: geosite-google"
+            clearable />
+        </el-form-item>
+
+        <el-form-item label="类型" prop="type">
+          <el-select
+            v-model="ruleSetForm.type"
+            placeholder="请选择规则集类型"
+            style="width: 100%">
+            <el-option label="远程" value="remote" />
+            <el-option label="本地" value="local" />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="格式" prop="format">
+          <el-select
+            v-model="ruleSetForm.format"
+            placeholder="请选择规则集格式"
+            style="width: 100%">
+            <el-option label="Binary" value="binary" />
+            <el-option label="Source" value="source" />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item
+          v-if="ruleSetForm.type === 'remote'"
+          label="URL"
+          prop="url">
+          <el-input
+            v-model="ruleSetForm.url"
+            placeholder="请输入规则集URL"
+            clearable />
+        </el-form-item>
+
+        <el-form-item
+          v-if="ruleSetForm.type === 'local'"
+          label="路径"
+          prop="path">
+          <el-input
+            v-model="ruleSetForm.path"
+            placeholder="请输入本地文件路径"
+            clearable />
+        </el-form-item>
+
+        <el-form-item
+          v-if="ruleSetForm.type === 'remote'"
+          label="下载代理">
+          <el-select
+            v-model="ruleSetForm.download_detour"
+            placeholder="请选择下载代理（可选）"
+            clearable
+            style="width: 100%">
+            <el-option
+              v-for="outbound in availableOutbounds"
+              :key="outbound"
+              :label="outbound"
+              :value="outbound" />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item
+          v-if="ruleSetForm.type === 'remote'"
+          label="更新间隔">
+          <el-input
+            v-model="ruleSetForm.update_interval"
+            placeholder="如: 1d, 12h, 30m (可选)"
+            clearable />
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="handleRuleSetCancel">取消</el-button>
+          <el-button type="primary" @click="handleRuleSetSave" :loading="ruleSetLoading">
+            {{ editingRuleSet ? '更新' : '添加' }}
+          </el-button>
+        </span>
+      </template>
+    </el-dialog>
+
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh, Plus, Edit, Delete, Document, ArrowUp, ArrowDown } from '@element-plus/icons-vue'
+import { Refresh, Plus, Edit, Delete, Document, ArrowUp, ArrowDown, InfoFilled, RefreshRight } from '@element-plus/icons-vue'
 import ServiceStatus from '../components/ServiceStatus.vue'
-import { apiGetSingBoxRules, apiGetSingBoxOutbounds, apiCreateRouteRule, apiUpdateRouteRule, apiDeleteRouteRule } from '../utils/api'
+import { apiGetSingBoxRules, apiGetSingBoxOutbounds, apiCreateRouteRule, apiUpdateRouteRule, apiDeleteRouteRule, apiMoveRouteRuleUp, apiMoveRouteRuleDown, apiReorderRouteRules, apiValidateCurrentSingBoxConfig } from '../utils/api'
+import Sortable from 'sortablejs'
 
 // 响应式数据
 const activeTab = ref('route-rules')
@@ -328,6 +482,72 @@ const routeRules = ref([])
 const ruleSets = ref([])
 const availableOutbounds = ref([])
 const availableRuleSets = ref([])
+
+// 规则集管理相关
+const showRuleSetDialog = ref(false)
+const editingRuleSet = ref(null)
+const ruleSetFormRef = ref()
+const ruleSetLoading = ref(false)
+const ruleSetForm = reactive({
+  tag: '',
+  type: 'remote',
+  format: 'binary',
+  url: '',
+  path: '',
+  download_detour: '',
+  update_interval: ''
+})
+
+// 规则集表单验证规则
+const ruleSetFormRules = reactive({
+  tag: [
+    { required: true, message: '请输入规则集标签', trigger: 'blur' },
+    { min: 1, max: 50, message: '标签长度应为 1-50 个字符', trigger: 'blur' }
+  ],
+  type: [
+    { required: true, message: '请选择规则集类型', trigger: 'change' }
+  ],
+  url: [
+    { 
+      validator: (rule, value, callback) => {
+        if (ruleSetForm.type === 'remote' && !value) {
+          callback(new Error('远程规则集必须提供URL'))
+        } else {
+          callback()
+        }
+      }, 
+      trigger: 'blur' 
+    }
+  ],
+  path: [
+    { 
+      validator: (rule, value, callback) => {
+        if (ruleSetForm.type === 'local' && !value) {
+          callback(new Error('本地规则集必须提供文件路径'))
+        } else {
+          callback()
+        }
+      }, 
+      trigger: 'blur' 
+    }
+  ]
+})
+
+// 拖拽相关
+const routeRulesTable = ref()
+let sortableInstance = null
+const isDragging = ref(false)
+
+// 保存状态管理
+const hasUnsavedChanges = ref(false)
+const isSaving = ref(false)
+const isReverting = ref(false)
+const originalRulesOrder = ref([]) // 保存原始规则顺序
+const currentRulesOrder = ref([])   // 当前显示的规则顺序
+
+// 重启服务状态管理
+const needsRestart = ref(false)
+const isRestarting = ref(false)
 
 // 路由规则编辑相关
 const ruleDialogVisible = ref(false)
@@ -338,6 +558,7 @@ const saving = ref(false)
 const ruleFormRef = ref()
 const activeCollapse = ref([])
 const selectedRuleSets = ref([])
+const movingRuleIds = ref(new Set())
 
 // 路由规则表单数据
 const ruleForm = reactive({
@@ -514,6 +735,13 @@ const refreshRules = async () => {
     if (response.code === 200) {
       // 处理路由规则数据
       routeRules.value = response.data.routeRules || []
+      // 保存原始规则顺序（用于撤销）
+      originalRulesOrder.value = [...routeRules.value]
+      currentRulesOrder.value = routeRules.value.map(rule => rule.id)
+      // 重置未保存状态
+      hasUnsavedChanges.value = false
+      // 数据刷新后可以清除重启提醒（说明配置已同步）
+      // needsRestart.value = false
       // 处理规则集数据
       ruleSets.value = response.data.ruleSets || []
       // 更新可用规则集列表
@@ -528,6 +756,9 @@ const refreshRules = async () => {
     routeRules.value = []
     ruleSets.value = []
     availableRuleSets.value = []
+  } finally {
+    // 数据更新后重新初始化拖拽
+    setTimeout(initSortable, 100)
   }
 }
 
@@ -755,35 +986,9 @@ const saveRouteRule = async () => {
     ruleDialogVisible.value = false
     await refreshRules() // 确保刷新完成
     
-    // 只有在保存成功后才询问是否重启服务
+    // 标记需要重启服务
     if (saveSuccess) {
-      try {
-        await ElMessageBox.confirm(
-          '✅ 路由规则验证成功并已保存！\n\n是否重启 Sing-Box 服务以应用更改？',
-          '重启服务',
-          {
-            confirmButtonText: '重启服务',
-            cancelButtonText: '稍后手动重启',
-            type: 'info',
-            closeOnClickModal: false,
-            closeOnPressEscape: false,
-            showClose: true
-          }
-        )
-        
-        // 用户选择重启服务
-        try {
-          const { apiRestartSingBoxService } = await import('../utils/api')
-          await apiRestartSingBoxService()
-          ElMessage.success('Sing-Box 服务重启成功')
-        } catch (error) {
-          ElMessage.error('重启服务失败: ' + (error.response?.data?.error || error.message))
-        }
-      } catch (dismissReason) {
-        // 用户选择稍后手动重启或关闭对话框
-        // 这里不需要做任何事情，因为规则已经保存成功
-        console.log('用户选择稍后重启服务或关闭了对话框')
-      }
+      needsRestart.value = true
     }
   } catch (error) {
     console.error('保存失败:', error)
@@ -828,34 +1033,8 @@ const deleteRouteRule = (rule, index) => {
       ElMessage.success('路由规则删除成功')
       await refreshRules() // 确保刷新完成
       
-      // 删除成功后询问是否重启服务
-      try {
-        await ElMessageBox.confirm(
-          '规则已删除并验证成功。是否重启 Sing-Box 服务以应用更改？',
-          '重启服务',
-          {
-            confirmButtonText: '重启服务',
-            cancelButtonText: '稍后手动重启',
-            type: 'info',
-            closeOnClickModal: false,
-            closeOnPressEscape: false,
-            showClose: true
-          }
-        )
-        
-        // 用户选择重启服务
-        try {
-          const { apiRestartSingBoxService } = await import('../utils/api')
-          await apiRestartSingBoxService()
-          ElMessage.success('Sing-Box 服务重启成功')
-        } catch (error) {
-          ElMessage.error('重启服务失败: ' + (error.response?.data?.error || error.message))
-        }
-      } catch (dismissReason) {
-        // 用户选择稍后手动重启或关闭对话框
-        // 这里不需要做任何事情，因为规则已经删除成功
-        console.log('用户选择稍后重启服务或关闭了对话框')
-      }
+      // 标记需要重启服务
+      needsRestart.value = true
     } catch (error) {
       const errorMsg = error.response?.data?.error || error.message || '删除失败'
       ElMessage.error(errorMsg)
@@ -867,13 +1046,22 @@ const deleteRouteRule = (rule, index) => {
 
 // 规则集管理方法
 const addRuleSet = () => {
-  // TODO: 实现添加规则集功能
-  ElMessage.info('添加规则集功能开发中...')
+  showRuleSetDialog.value = true
+  editingRuleSet.value = null
+  resetRuleSetForm()
 }
 
 const editRuleSet = (ruleSet) => {
-  // TODO: 实现编辑规则集功能
-  ElMessage.info('编辑规则集功能开发中...')
+  showRuleSetDialog.value = true
+  editingRuleSet.value = ruleSet
+  // 填充表单数据
+  ruleSetForm.tag = ruleSet.tag || ''
+  ruleSetForm.type = ruleSet.type || 'remote'
+  ruleSetForm.format = ruleSet.format || 'binary'
+  ruleSetForm.url = ruleSet.url || ''
+  ruleSetForm.path = ruleSet.path || ''
+  ruleSetForm.download_detour = ruleSet.download_detour || ''
+  ruleSetForm.update_interval = ruleSet.update_interval || ''
 }
 
 const deleteRuleSet = (ruleSet) => {
@@ -887,17 +1075,75 @@ const deleteRuleSet = (ruleSet) => {
     }
   ).then(async () => {
     try {
-      // TODO: 调用API删除规则集
-      await new Promise(resolve => setTimeout(resolve, 500)) // 模拟API调用
-      
+      ruleSetLoading.value = true
+      const { apiDeleteRuleSet } = await import('../utils/api')
+      await apiDeleteRuleSet(ruleSet.id)
       ElMessage.success('规则集删除成功')
-      refreshRules()
+      needsRestart.value = true
+      // 重新加载数据
+      await refreshRules()
     } catch (error) {
-      ElMessage.error('删除失败: ' + error.message)
+      ElMessage.error('删除失败: ' + (error.response?.data?.error || error.message))
+    } finally {
+      ruleSetLoading.value = false
     }
   }).catch(() => {
     // 用户取消删除
   })
+}
+
+// 规则集表单管理
+const resetRuleSetForm = () => {
+  Object.assign(ruleSetForm, {
+    tag: '',
+    type: 'remote',
+    format: 'binary',
+    url: '',
+    path: '',
+    download_detour: '',
+    update_interval: ''
+  })
+  // 清除表单验证状态
+  if (ruleSetFormRef.value) {
+    ruleSetFormRef.value.clearValidate()
+  }
+}
+
+const handleRuleSetSave = async () => {
+  // 表单验证
+  if (!ruleSetFormRef.value) return
+  
+  const valid = await ruleSetFormRef.value.validate().catch(() => false)
+  if (!valid) return
+
+  try {
+    ruleSetLoading.value = true
+    
+    if (editingRuleSet.value) {
+      // 编辑模式
+      const { apiUpdateRuleSet } = await import('../utils/api')
+      await apiUpdateRuleSet(editingRuleSet.value.id, { ...ruleSetForm })
+      ElMessage.success('规则集更新成功')
+    } else {
+      // 添加模式
+      const { apiCreateRuleSet } = await import('../utils/api')
+      await apiCreateRuleSet({ ...ruleSetForm })
+      ElMessage.success('规则集创建成功')
+    }
+    
+    needsRestart.value = true
+    showRuleSetDialog.value = false
+    await refreshRules()
+  } catch (error) {
+    ElMessage.error(`操作失败: ${error.response?.data?.error || error.message}`)
+  } finally {
+    ruleSetLoading.value = false
+  }
+}
+
+const handleRuleSetCancel = () => {
+  showRuleSetDialog.value = false
+  resetRuleSetForm()
 }
 
 const moveRuleSetUp = (ruleSet) => {
@@ -910,10 +1156,216 @@ const moveRuleSetDown = (ruleSet) => {
   ElMessage.info('规则集排序功能开发中...')
 }
 
+// 路由规则排序
+const isRuleMoving = (rule) => movingRuleIds.value.has(rule.id)
+
+const moveRouteRuleUp = (rule, index) => {
+  if (index === 0 || hasUnsavedChanges.value) return
+  
+  // 本地移动（不立即保存）
+  const newOrder = [...routeRules.value]
+  const temp = newOrder[index]
+  newOrder[index] = newOrder[index - 1]
+  newOrder[index - 1] = temp
+  
+  // 更新显示
+  routeRules.value = newOrder
+  currentRulesOrder.value = newOrder.map(rule => rule.id)
+  hasUnsavedChanges.value = true
+  
+  ElMessage.info('规则顺序已更改，请点击"保存更改"按钮确认')
+}
+
+const moveRouteRuleDown = (rule, index) => {
+  if (index === routeRules.value.length - 1 || hasUnsavedChanges.value) return
+  
+  // 本地移动（不立即保存）
+  const newOrder = [...routeRules.value]
+  const temp = newOrder[index]
+  newOrder[index] = newOrder[index + 1]
+  newOrder[index + 1] = temp
+  
+  // 更新显示
+  routeRules.value = newOrder
+  currentRulesOrder.value = newOrder.map(rule => rule.id)
+  hasUnsavedChanges.value = true
+  
+  ElMessage.info('规则顺序已更改，请点击"保存更改"按钮确认')
+}
+
+// 初始化拖拽排序
+const initSortable = () => {
+  if (!routeRulesTable.value || routeRules.value.length === 0) return
+  
+  // 销毁之前的实例
+  if (sortableInstance) {
+    sortableInstance.destroy()
+  }
+  
+  // 获取表格的tbody元素
+  const tbody = routeRulesTable.value.$el.querySelector('.el-table__body-wrapper tbody')
+  if (!tbody) return
+
+  sortableInstance = Sortable.create(tbody, {
+    animation: 150,
+    ghostClass: 'sortable-ghost',
+    chosenClass: 'sortable-chosen',
+    dragClass: 'sortable-drag',
+    onStart: () => {
+      isDragging.value = true
+    },
+    onEnd: (evt) => {
+      isDragging.value = false
+      
+      // 如果位置没有变化，直接返回
+      if (evt.oldIndex === evt.newIndex) return
+      
+      // 更新本地显示顺序（不立即保存）
+      const newOrder = [...routeRules.value]
+      const movedItem = newOrder.splice(evt.oldIndex, 1)[0]
+      newOrder.splice(evt.newIndex, 0, movedItem)
+      
+      // 更新当前显示的规则顺序
+      routeRules.value = newOrder
+      currentRulesOrder.value = newOrder.map(rule => rule.id)
+      
+      // 标记有未保存的更改
+      hasUnsavedChanges.value = true
+      
+      ElMessage.info('规则顺序已更改，请点击"保存更改"按钮确认')
+    }
+  })
+}
+
+// 处理行点击事件（阻止拖拽时的编辑）
+const handleRowClick = () => {
+  // 拖拽时不响应行点击
+  if (isDragging.value) return
+}
+
+// 保存更改
+const saveChanges = async () => {
+  if (!hasUnsavedChanges.value) return
+  
+  try {
+    isSaving.value = true
+    
+    // 调用批量重排序接口
+    await apiReorderRouteRules(currentRulesOrder.value)
+    
+    ElMessage.success('规则排序保存成功')
+    
+    // 重新加载数据以确保同步
+    await refreshRules()
+    
+    // 标记需要重启服务
+    needsRestart.value = true
+    
+  } catch (error) {
+    console.error('保存失败:', error)
+    ElMessage.error(error.response?.data?.error || error.message || '保存失败')
+  } finally {
+    isSaving.value = false
+  }
+}
+
+// 撤销更改
+const cancelChanges = () => {
+  if (!hasUnsavedChanges.value) return
+  
+  ElMessageBox.confirm(
+    '确定要撤销当前的排序更改吗？所有未保存的排序调整将被丢弃。',
+    '确认撤销',
+    {
+      confirmButtonText: '确定撤销',
+      cancelButtonText: '取消',
+      type: 'warning'
+    }
+  ).then(() => {
+    // 恢复原始顺序
+    routeRules.value = [...originalRulesOrder.value]
+    currentRulesOrder.value = originalRulesOrder.value.map(rule => rule.id)
+    hasUnsavedChanges.value = false
+    
+    ElMessage.success('已撤销排序更改')
+    
+    // 重新初始化拖拽以更新DOM
+    setTimeout(initSortable, 100)
+  }).catch(() => {
+    // 用户取消撤销
+  })
+}
+
+// 重启服务
+const restartService = async () => {
+  try {
+    isRestarting.value = true
+    
+    // 第一步：验证当前配置
+    ElMessage.info('正在验证配置文件...')
+    const validationResult = await apiValidateCurrentSingBoxConfig()
+    
+    if (!validationResult.data.valid) {
+      // 配置验证失败
+      ElMessageBox.alert(
+        `配置文件验证失败，无法重启服务：\n\n${validationResult.data.error || '未知错误'}`,
+        '配置验证失败',
+        {
+          confirmButtonText: '确定',
+          type: 'error',
+          dangerouslyUseHTMLString: false
+        }
+      )
+      return
+    }
+    
+    // 第二步：配置验证通过，确认重启
+    await ElMessageBox.confirm(
+      '✅ 配置文件验证通过！\n\n确定要重启 Sing-Box 服务吗？',
+      '确认重启服务',
+      {
+        confirmButtonText: '重启服务',
+        cancelButtonText: '取消',
+        type: 'info'
+      }
+    )
+    
+    // 第三步：执行重启
+    ElMessage.info('正在重启服务...')
+    const { apiRestartSingBoxService } = await import('../utils/api')
+    await apiRestartSingBoxService()
+    
+    ElMessage.success('Sing-Box 服务重启成功')
+    needsRestart.value = false
+    
+  } catch (error) {
+    // 区分不同类型的错误
+    if (error === 'cancel') {
+      ElMessage.info('已取消重启服务')
+    } else if (error.response?.data?.error) {
+      ElMessage.error('重启服务失败: ' + error.response.data.error)
+    } else if (error.message) {
+      ElMessage.error('重启服务失败: ' + error.message)
+    } else {
+      ElMessage.error('重启服务失败')
+    }
+  } finally {
+    isRestarting.value = false
+  }
+}
+
+// 稍后重启（隐藏提醒栏）
+const dismissRestart = () => {
+  needsRestart.value = false
+  ElMessage.info('已隐藏重启提醒，您可以稍后手动重启服务')
+}
+
 // 组件挂载时获取数据
-onMounted(() => {
-  loadAvailableOutbounds()
-  refreshRules()
+onMounted(async () => {
+  await loadAvailableOutbounds()
+  await refreshRules()
+  // 数据加载完成后初始化拖拽
+  setTimeout(initSortable, 100)
 })
 </script>
 
@@ -930,6 +1382,78 @@ onMounted(() => {
   margin: 0;
   color: #303133;
   font-size: 20px;
+}
+
+/* 保存/撤销操作栏样式 */
+.save-bar {
+  background-color: #fff7e6;
+  border: 1px solid #ffd591;
+  border-radius: 6px;
+  margin-bottom: 20px;
+  padding: 0;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+}
+
+.save-bar-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+}
+
+.save-bar-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #d46b08;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.warning-icon {
+  color: #fa8c16;
+  font-size: 16px;
+}
+
+.save-bar-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* 重启服务提醒栏样式 */
+.restart-bar {
+  background-color: #f0f9ff;
+  border: 1px solid #91d5ff;
+  border-radius: 6px;
+  margin-bottom: 20px;
+  padding: 0;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+}
+
+.restart-bar-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+}
+
+.restart-bar-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #1677ff;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.restart-icon {
+  color: #52c41a;
+  font-size: 16px;
+}
+
+.restart-bar-actions {
+  display: flex;
+  gap: 8px;
 }
 
 /* 移除不再使用的标签页样式 */
@@ -1333,6 +1857,28 @@ onMounted(() => {
   padding: 0 4px;
   height: 18px;
   line-height: 18px;
+}
+
+/* 拖拽排序样式 */
+.el-table tbody.sortable-ghost {
+  opacity: 0.4;
+}
+
+.el-table tbody tr.sortable-chosen {
+  background-color: #f5f7fa;
+}
+
+.el-table tbody tr.sortable-drag {
+  background-color: #409eff;
+  color: white;
+}
+
+.el-table tbody tr {
+  cursor: move;
+}
+
+.el-table tbody tr:hover {
+  background-color: #f5f7fa;
 }
 
 </style>

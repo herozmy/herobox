@@ -6,11 +6,11 @@ import "time"
 type ServiceStatus string
 
 const (
-	StatusRunning     ServiceStatus = "running"
-	StatusStopped     ServiceStatus = "stopped"
-	StatusFailed      ServiceStatus = "failed"
+	StatusRunning      ServiceStatus = "running"
+	StatusStopped      ServiceStatus = "stopped"
+	StatusFailed       ServiceStatus = "failed"
 	StatusNotInstalled ServiceStatus = "not_installed"
-	StatusUnknown     ServiceStatus = "unknown"
+	StatusUnknown      ServiceStatus = "unknown"
 )
 
 // ServiceAction 服务操作
@@ -25,10 +25,13 @@ const (
 
 // ServiceInfo 服务信息
 type ServiceInfo struct {
-	Name   string        `json:"name"`
-	Status ServiceStatus `json:"status"`
-	PID    int           `json:"pid,omitempty"`
-	Uptime string        `json:"uptime,omitempty"`
+	Name     string        `json:"name"`
+	Status   ServiceStatus `json:"status"`
+	PID      int           `json:"pid,omitempty"`
+	Uptime   string        `json:"uptime,omitempty"`
+	Version  string        `json:"version,omitempty"`
+	Platform string        `json:"platform,omitempty"`
+	Branch   string        `json:"branch,omitempty"`
 }
 
 // ServiceActionRequest 服务操作请求
@@ -77,7 +80,6 @@ type LogResponse struct {
 	TotalLines    int    `json:"total_lines"`
 	FilteredLines int    `json:"filtered_lines"`
 }
-
 
 // SystemInfo 系统信息
 type SystemInfo struct {

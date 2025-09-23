@@ -65,41 +65,6 @@
               <el-icon v-else><Monitor /></el-icon>
             </div>
           </template>
-          
-          <div v-if="serviceInfo" class="service-content">
-            <div v-if="serviceInfo.status === 'not_installed'" class="not-installed-content">
-              <div class="status-message">服务未安装</div>
-              <div class="install-guide">
-                <div class="guide-title">📖 安装指南</div>
-                <div class="guide-buttons">
-                  <el-button 
-                    type="primary" 
-                    size="small" 
-                    plain
-                    @click="openLink('https://sing-box.sagernet.org/installation/')"
-                    class="guide-button">
-                    <el-icon><Document /></el-icon>
-                    官方文档
-                  </el-button>
-                  <el-button 
-                    type="info" 
-                    size="small" 
-                    plain
-                    @click="openLink('https://github.com/SagerNet/sing-box')"
-                    class="guide-button">
-                    <el-icon><Link /></el-icon>
-                    GitHub 仓库
-                  </el-button>
-                </div>
-              </div>
-            </div>
-            
-            <div v-else-if="serviceInfo.status === 'stopped'" class="service-stopped">
-              {{ getServiceStoppedText(serviceInfo.status) }}
-            </div>
-          </div>
-          
-          <el-skeleton v-else :rows="3" animated />
         </el-card>
       </el-col>
       
@@ -123,37 +88,57 @@
           </div>
         </el-card>
         
-        <el-skeleton v-else-if="!serviceInfo" :rows="4" animated />
+        <el-card class="help-card" v-else-if="loading && !serviceInfo">
+          <el-skeleton :rows="4" animated />
+        </el-card>
+        
+        <el-card class="kernel-info-card" v-else>
+          <template #header>
+            <div class="card-header">
+              <div class="header-left">
+                <span class="service-title">内核信息</span>
+                <div v-if="kernelInfo" class="inline-status">
+                  <el-tag type="primary" size="small" class="kernel-tag">
+                    <el-icon class="kernel-icon"><Monitor /></el-icon>
+                    {{ kernelInfo.name }}
+                  </el-tag>
+                  <el-tooltip v-if="kernelInfo.version && kernelInfo.version !== 'Unknown'" 
+                              :content="'完整版本: ' + kernelInfo.version" 
+                              placement="top">
+                    <el-tag type="success" size="small" class="version-tag">
+                      {{ kernelInfo.version }}
+                    </el-tag>
+                  </el-tooltip>
+                  <el-tag v-if="kernelInfo.platform && kernelInfo.platform !== 'Unknown'" 
+                          type="info" size="small" class="platform-tag">
+                    {{ kernelInfo.platform }}
+                  </el-tag>
+                  <el-tag v-if="kernelInfo.branch && kernelInfo.branch !== ''" 
+                          type="warning" size="small" class="branch-tag">
+                    {{ kernelInfo.branch }}
+                  </el-tag>
+                </div>
+                <div v-else class="inline-status">
+                  <el-icon class="is-loading"><Loading /></el-icon>
+                  <span>获取内核信息中...</span>
+                </div>
+              </div>
+              <div class="header-controls">
+                <el-button 
+                  type="primary" 
+                  size="small"
+                  @click="showUpdateKernelDialog"
+                  :loading="updateLoading">
+                  <el-icon><Download /></el-icon>
+                  更新内核
+                </el-button>
+              </div>
+            </div>
+          </template>
+        </el-card>
       </el-col>
     </el-row>
 
-    <!-- 日志查看 -->
-    <el-card class="logs-section" v-if="serviceInfo && serviceInfo.status !== 'not_installed'">
-      <template #header>
-        <div class="card-header">
-          <span>服务日志</span>
-          <el-icon><DocumentCopy /></el-icon>
-        </div>
-      </template>
-      
-      <div class="logs-content">
-        <div class="logs-toolbar">
-          <el-button size="small" @click="refreshLogs" :loading="logsLoading">
-            <el-icon><Refresh /></el-icon>
-            刷新日志
-          </el-button>
-          <el-button size="small" @click="clearLogs">
-            <el-icon><Delete /></el-icon>
-            清空显示
-          </el-button>
-        </div>
-        
-        <div class="logs-container">
-          <pre v-if="logs.length > 0" class="logs-text">{{ logs.join('\n') }}</pre>
-          <el-empty v-else description="暂无日志数据" :image-size="80" />
-        </div>
-      </div>
-    </el-card>
 
     <!-- 配置编辑器对话框 -->
     <el-dialog 
@@ -225,23 +210,148 @@
         </div>
       </template>
     </el-dialog>
+
+    <!-- 内核更新对话框 -->
+    <el-dialog
+      v-model="updateKernelDialogVisible"
+      title="更新 Sing-Box 内核"
+      width="600px"
+      :close-on-click-modal="false">
+      
+      <div class="kernel-update-content">
+        <div class="current-info">
+          <h4>当前内核信息</h4>
+          <div class="info-grid">
+            <div class="info-item">
+              <span class="label">版本:</span>
+              <span class="value">{{ kernelInfo?.version || 'Unknown' }}</span>
+            </div>
+            <div class="info-item">
+              <span class="label">平台:</span>
+              <span class="value">{{ kernelInfo?.platform || 'Unknown' }}</span>
+            </div>
+            <div class="info-item">
+              <span class="label">分支:</span>
+              <span class="value">{{ kernelInfo?.branch || 'Unknown' }}</span>
+            </div>
+            <div class="info-item path-info">
+              <span class="label">安装路径:</span>
+              <pre class="value path-value">{{ updateInfo.currentPath || '检测中...' }}</pre>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="updateInfo.latestVersion" class="latest-info">
+          <h4>最新版本信息</h4>
+          <div class="info-grid">
+            <div class="info-item">
+              <span class="label">版本:</span>
+              <span class="value">{{ updateInfo.latestVersion }}</span>
+            </div>
+            <div class="info-item">
+              <span class="label">发布时间:</span>
+              <span class="value">{{ updateInfo.publishTime }}</span>
+            </div>
+            <div class="info-item">
+              <span class="label">下载URL:</span>
+              <span class="value download-url">{{ updateInfo.downloadUrl }}</span>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="updateProgress.show" class="update-progress">
+          <h4>更新进度</h4>
+          <el-progress 
+            :percentage="updateProgress.percentage" 
+            :status="updateProgress.status"
+            :stroke-width="8">
+            <span class="progress-text">{{ updateProgress.text }}</span>
+          </el-progress>
+          <div v-if="updateProgress.logs.length > 0" class="progress-logs">
+            <div v-for="(log, index) in updateProgress.logs" :key="index" class="log-item">
+              <span class="log-time">{{ log.time }}</span>
+              <span class="log-message">{{ log.message }}</span>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="updateInfo.error" class="update-error">
+          <el-alert
+            :title="updateInfo.error"
+            type="error"
+            :closable="false">
+          </el-alert>
+        </div>
+      </div>
+
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="closeUpdateDialog" :disabled="updateProgress.show && updateProgress.percentage < 100">
+            取消
+          </el-button>
+          <el-button 
+            v-if="!updateProgress.show"
+            type="primary" 
+            @click="checkLatestVersion"
+            :loading="updateLoading">
+            检查更新
+          </el-button>
+          <el-button 
+            v-if="updateInfo.latestVersion && !updateProgress.show"
+            type="success" 
+            @click="startKernelUpdate"
+            :loading="updateLoading">
+            开始更新
+          </el-button>
+        </span>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, h, watch } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, h, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { 
   Refresh, Monitor, Setting, Document, Link, VideoPlay, VideoPause, 
-  RefreshRight, Edit, CircleCheck, CircleClose, Warning, DocumentCopy, Delete, QuestionFilled 
+  RefreshRight, Edit, CircleCheck, CircleClose, Warning, Delete, QuestionFilled, Loading, Download
 } from '@element-plus/icons-vue'
-import { apiGetServiceInfo, apiControlService, apiGetLogs, apiGetSingBoxConfig, apiUpdateSingBoxConfig, apiValidateSingBoxConfig } from '../utils/api'
+import { 
+  apiGetServiceInfo, 
+  apiControlService, 
+  apiGetSingBoxConfig, 
+  apiUpdateSingBoxConfig, 
+  apiValidateSingBoxConfig,
+  apiDetectSingBoxPath,
+  apiCheckSingBoxUpdate,
+  apiUpdateSingBoxKernel
+} from '../utils/api'
 
-const loading = ref(false)
+const loading = ref(true)
 const actionLoading = ref('')
-const logsLoading = ref(false)
 const serviceInfo = ref(null)
-const logs = ref([])
+const kernelInfo = ref(null)
+
+// 内核更新相关
+const updateKernelDialogVisible = ref(false)
+const updateLoading = ref(false)
+const updateInfo = reactive({
+  currentPath: '',
+  latestVersion: '',
+  publishTime: '',
+  downloadUrl: '',
+  error: ''
+})
+const updateProgress = reactive({
+  show: false,
+  percentage: 0,
+  status: '',
+  text: '',
+  logs: []
+})
+
+// EventSource 引用，用于清理
+let currentEventSource = null
 
 // 配置编辑器相关状态
 const configDialogVisible = ref(false)
@@ -312,9 +422,34 @@ const refreshData = async () => {
   try {
     const response = await apiGetServiceInfo('sing-box')
     serviceInfo.value = response.data
+    
+    // 设置内核信息
+    if (response.data && response.data.version) {
+      kernelInfo.value = {
+        name: 'Sing-Box',
+        version: response.data.version,
+        platform: response.data.platform || 'Unknown',
+        branch: response.data.branch || ''
+      }
+    } else {
+      // 如果服务信息中没有版本信息，设置默认值
+      kernelInfo.value = {
+        name: 'Sing-Box',
+        version: 'Unknown',
+        platform: 'Unknown',
+        branch: ''
+      }
+    }
   } catch (error) {
     console.error('获取服务信息失败:', error)
     ElMessage.error('获取服务信息失败')
+    // 错误时也设置默认的内核信息
+    kernelInfo.value = {
+      name: 'Sing-Box',
+      version: 'Error',
+      platform: 'Unknown',
+      branch: ''
+    }
   } finally {
     loading.value = false
   }
@@ -592,22 +727,6 @@ const closeConfigDialog = () => {
   }
 }
 
-const refreshLogs = async () => {
-  logsLoading.value = true
-  try {
-    const response = await apiGetLogs('sing-box')
-    logs.value = response.data.logs || []
-  } catch (error) {
-    console.error('获取日志失败:', error)
-    ElMessage.error('获取日志失败')
-  } finally {
-    logsLoading.value = false
-  }
-}
-
-const clearLogs = () => {
-  logs.value = []
-}
 
 // 监听配置内容变化，重置验证状态
 watch(configContent, () => {
@@ -616,9 +735,238 @@ watch(configContent, () => {
   }
 })
 
+// 内核更新相关函数
+const showUpdateKernelDialog = () => {
+  updateKernelDialogVisible.value = true
+  resetUpdateInfo()
+  detectCurrentPath()
+}
+
+
+const resetUpdateInfo = () => {
+  updateInfo.currentPath = ''
+  updateInfo.latestVersion = ''
+  updateInfo.publishTime = ''
+  updateInfo.downloadUrl = ''
+  updateInfo.error = ''
+  updateProgress.show = false
+  updateProgress.percentage = 0
+  updateProgress.status = ''
+  updateProgress.text = ''
+  updateProgress.logs = []
+}
+
+const detectCurrentPath = async () => {
+  console.log('开始检测当前路径...')
+  updateInfo.currentPath = '检测中...'
+  
+  try {
+    console.log('调用 apiDetectSingBoxPath...')
+    const response = await apiDetectSingBoxPath()
+    console.log('API 响应:', response)
+    
+    // 由于axios拦截器已经返回了response.data，所以response就是实际的数据
+    console.log('响应结构分析:', {
+      hasResponse: !!response,
+      hasPath: !!(response && response.path),
+      fullResponse: response
+    })
+    
+    if (response && response.path) {
+      updateInfo.currentPath = response.path
+      console.log('成功检测到路径:', response.path)
+    } else {
+      updateInfo.currentPath = '未检测到路径'
+      console.log('响应中没有路径信息:', response)
+    }
+  } catch (error) {
+    console.error('路径检测详细错误:', error)
+    
+    // 安全地处理错误响应
+    // 由于axios拦截器，错误响应的数据直接在error.response中
+    if (error.response) {
+      const errorData = error.response
+      let debugText = '检测失败\n'
+      
+      // 显示主要错误信息
+      if (errorData.error) {
+        debugText += '错误: ' + errorData.error + '\n\n'
+      }
+      
+      // 显示调试信息
+      if (errorData.debug_info && Array.isArray(errorData.debug_info)) {
+        debugText += '调试信息:\n'
+        errorData.debug_info.forEach(info => {
+          debugText += '- ' + info + '\n'
+        })
+      }
+      
+      // 显示检测方法
+      if (errorData.detection_methods && Array.isArray(errorData.detection_methods)) {
+        debugText += '\n检测方法:\n'
+        errorData.detection_methods.forEach(method => {
+          debugText += '- ' + method + '\n'
+        })
+      }
+      
+      // 显示检查过的路径
+      if (errorData.checked_paths && Array.isArray(errorData.checked_paths)) {
+        debugText += '\n检查过的路径:\n'
+        errorData.checked_paths.forEach(path => {
+          debugText += '- ' + path + '\n'
+        })
+      }
+      
+      updateInfo.currentPath = debugText
+    } else if (error.message) {
+      updateInfo.currentPath = '检测失败: ' + error.message
+    } else {
+      updateInfo.currentPath = '检测失败: 未知错误'
+    }
+  }
+}
+
+const checkLatestVersion = async () => {
+  try {
+    updateLoading.value = true
+    updateInfo.error = ''
+    
+    const response = await apiCheckSingBoxUpdate()
+    
+    if (response.hasUpdate) {
+      updateInfo.latestVersion = response.version
+      updateInfo.publishTime = response.publishTime
+      updateInfo.downloadUrl = response.downloadUrl
+      ElMessage.success('发现新版本: ' + response.version)
+    } else {
+      ElMessage.info('当前已是最新版本')
+    }
+  } catch (error) {
+    updateInfo.error = '检查更新失败: ' + (error.response?.error || error.message)
+  } finally {
+    updateLoading.value = false
+  }
+}
+
+const startKernelUpdate = async () => {
+  try {
+    // 关闭之前的EventSource（如果存在）
+    if (currentEventSource) {
+      currentEventSource.close()
+      currentEventSource = null
+    }
+    
+    updateLoading.value = true
+    updateProgress.show = true
+    updateProgress.percentage = 0
+    updateProgress.status = ''
+    updateProgress.text = '准备更新...'
+    updateProgress.logs = []
+    
+    addProgressLog('开始更新内核...')
+    
+    // 创建 SSE 连接来实时接收更新进度
+    currentEventSource = new EventSource('/api/singbox/kernel/update-stream')
+    
+    currentEventSource.onmessage = (event) => {
+      const data = JSON.parse(event.data)
+      updateProgress.percentage = data.percentage || 0
+      updateProgress.text = data.message || ''
+      
+      if (data.log) {
+        addProgressLog(data.log)
+      }
+      
+      if (data.status) {
+        updateProgress.status = data.status
+      }
+      
+      if (data.finished) {
+        currentEventSource.close()
+        currentEventSource = null
+        updateLoading.value = false
+        if (data.success) {
+          ElMessage.success('内核更新成功！')
+          setTimeout(() => {
+            updateKernelDialogVisible.value = false
+            refreshData() // 刷新服务信息
+          }, 2000)
+        } else {
+          updateInfo.error = data.error || '更新失败'
+        }
+      }
+    }
+    
+    currentEventSource.onerror = () => {
+      if (currentEventSource) {
+        currentEventSource.close()
+        currentEventSource = null
+      }
+      updateLoading.value = false
+      updateInfo.error = '更新连接中断'
+    }
+    
+    // 启动更新
+    await apiUpdateSingBoxKernel({
+      downloadUrl: updateInfo.downloadUrl,
+      targetPath: updateInfo.currentPath
+    })
+    
+  } catch (error) {
+    // 确保在错误情况下也关闭EventSource
+    if (currentEventSource) {
+      currentEventSource.close()
+      currentEventSource = null
+    }
+    updateLoading.value = false
+    updateProgress.show = false
+    updateInfo.error = '更新失败: ' + (error.response?.error || error.message)
+  }
+}
+
+const addProgressLog = (message) => {
+  updateProgress.logs.push({
+    time: new Date().toLocaleTimeString(),
+    message: message
+  })
+}
+
+const closeUpdateDialog = () => {
+  if (updateProgress.show && updateProgress.percentage < 100) {
+    ElMessageBox.confirm('更新正在进行中，确定要关闭吗？', '确认关闭', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    }).then(() => {
+      // 关闭EventSource连接
+      if (currentEventSource) {
+        currentEventSource.close()
+        currentEventSource = null
+      }
+      updateKernelDialogVisible.value = false
+      resetUpdateInfo()
+    })
+  } else {
+    // 关闭EventSource连接
+    if (currentEventSource) {
+      currentEventSource.close()
+      currentEventSource = null
+    }
+    updateKernelDialogVisible.value = false
+    resetUpdateInfo()
+  }
+}
+
 onMounted(() => {
   refreshData()
-  refreshLogs()
+})
+
+onUnmounted(() => {
+  // 清理EventSource连接
+  if (currentEventSource) {
+    currentEventSource.close()
+    currentEventSource = null
+  }
 })
 </script>
 
@@ -797,8 +1145,7 @@ onMounted(() => {
   justify-content: center;
 }
 
-.config-section,
-.logs-section {
+.config-section {
   margin-bottom: 15px;
 }
 
@@ -827,6 +1174,42 @@ onMounted(() => {
   padding: 20px;
 }
 
+.kernel-tag {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-weight: 500;
+}
+
+.kernel-icon {
+  font-size: 12px;
+}
+
+.version-tag {
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-weight: 500;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.version-tag:hover {
+  max-width: none;
+  white-space: normal;
+  word-break: break-all;
+}
+
+.platform-tag {
+  font-size: 11px;
+}
+
+.branch-tag {
+  font-size: 11px;
+  font-weight: 500;
+}
+
 .config-item h4 {
   margin: 0 0 10px 0;
   color: #303133;
@@ -838,34 +1221,6 @@ onMounted(() => {
   font-size: 14px;
 }
 
-.logs-content {
-  padding: 15px 0;
-}
-
-.logs-toolbar {
-  display: flex;
-  gap: 10px;
-  margin-bottom: 15px;
-}
-
-.logs-container {
-  height: 250px;
-  border: 1px solid #e4e7ed;
-  border-radius: 6px;
-  overflow: auto;
-  background-color: #f8f9fa;
-}
-
-.logs-text {
-  padding: 12px;
-  margin: 0;
-  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-  font-size: 12px;
-  line-height: 1.4;
-  color: #303133;
-  white-space: pre-wrap;
-  word-wrap: break-word;
-}
 
 .status-dot {
   display: inline-block;
@@ -968,5 +1323,115 @@ onMounted(() => {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+}
+
+/* 内核更新对话框样式 */
+.kernel-update-content {
+  padding: 10px 0;
+}
+
+.current-info, .latest-info, .update-progress {
+  margin-bottom: 20px;
+}
+
+.current-info h4, .latest-info h4, .update-progress h4 {
+  margin: 0 0 10px 0;
+  color: #409eff;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.info-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.info-item {
+  display: flex;
+  padding: 8px 12px;
+  background: #f5f7fa;
+  border-radius: 4px;
+  border-left: 3px solid #409eff;
+}
+
+.info-item .label {
+  font-weight: 600;
+  color: #606266;
+  min-width: 60px;
+  margin-right: 8px;
+}
+
+.info-item .value {
+  color: #303133;
+  word-break: break-all;
+}
+
+.download-url {
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 12px;
+}
+
+.progress-logs {
+  margin-top: 15px;
+  max-height: 200px;
+  overflow-y: auto;
+  background: #f5f7fa;
+  border-radius: 4px;
+  padding: 10px;
+}
+
+.log-item {
+  display: flex;
+  margin-bottom: 5px;
+  font-size: 13px;
+}
+
+.log-time {
+  color: #909399;
+  margin-right: 10px;
+  min-width: 80px;
+}
+
+.log-message {
+  color: #303133;
+}
+
+.progress-text {
+  font-size: 12px;
+  color: #606266;
+}
+
+.update-error {
+  margin-top: 15px;
+}
+
+.header-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* 路径信息特殊样式 */
+.path-info {
+  grid-column: 1 / -1; /* 占据整个宽度 */
+  flex-direction: column !important;
+  align-items: flex-start !important;
+}
+
+.path-value {
+  width: 100%;
+  margin: 5px 0 0 0;
+  padding: 8px;
+  background: #f8f9fa;
+  border: 1px solid #e9ecef;
+  border-radius: 4px;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 150px;
+  overflow-y: auto;
 }
 </style>

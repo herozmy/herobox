@@ -9,9 +9,15 @@ const api = axios.create({
 // 响应拦截器 - 简化版，无需认证
 api.interceptors.response.use(
   response => {
-    return response.data
+    // 安全地返回响应数据
+    if (response && response.data !== undefined) {
+      return response.data
+    }
+    console.warn('API响应格式异常:', response)
+    return null
   },
   error => {
+    console.error('API请求错误:', error)
     return Promise.reject(error)
   }
 )
@@ -79,6 +85,36 @@ export const apiValidateSingBoxConfig = (config) => {
   return api.post('/singbox/config/validate', { config })
 }
 
+export const apiValidateCurrentSingBoxConfig = () => {
+  return api.post('/singbox/config/validate-current')
+}
+
+// 规则集管理API
+export const apiCreateRuleSet = (ruleSetData) => {
+  return api.post('/singbox/rulesets', ruleSetData)
+}
+
+export const apiUpdateRuleSet = (id, ruleSetData) => {
+  return api.put(`/singbox/rulesets/${id}`, ruleSetData)
+}
+
+export const apiDeleteRuleSet = (id) => {
+  return api.delete(`/singbox/rulesets/${id}`)
+}
+
+// 内核更新相关 API
+export const apiDetectSingBoxPath = () => {
+  return api.get('/singbox/kernel/detect-path')
+}
+
+export const apiCheckSingBoxUpdate = () => {
+  return api.get('/singbox/kernel/check-update')
+}
+
+export const apiUpdateSingBoxKernel = (data) => {
+  return api.post('/singbox/kernel/update', data)
+}
+
 
 export const apiControlService = (name, action) => {
   return api.post(`/services/${name}/action`, { action })
@@ -123,5 +159,10 @@ export const apiBatchSaveOutbounds = (changes) => api.post('/singbox/outbounds/b
 export const apiCreateRouteRule = (rule) => api.post('/singbox/rules/route', rule)
 export const apiUpdateRouteRule = (id, rule) => api.put(`/singbox/rules/route/${id}`, rule)
 export const apiDeleteRouteRule = (id) => api.delete(`/singbox/rules/route/${id}`)
+
+// 路由规则排序
+export const apiMoveRouteRuleUp = (id) => api.post(`/singbox/rules/route/${id}/move-up`)
+export const apiMoveRouteRuleDown = (id) => api.post(`/singbox/rules/route/${id}/move-down`)
+export const apiReorderRouteRules = (ruleIds) => api.post('/singbox/rules/route/reorder', { rule_ids: ruleIds })
 
 export default api

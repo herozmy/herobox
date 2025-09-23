@@ -1,0 +1,4 @@
+#!/bin/bash
+echo "sing-box version 1.13.0"
+echo "Environment: linux/amd64"
+echo "Tags: with_quic,with_dhcp,with_wireguard,with_ech,with_utls,with_reality,with_acme,with_clash_api"
